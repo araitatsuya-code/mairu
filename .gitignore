@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+
+# Go / Wails
+bin/
+dist/
+build/bin/
+*.log
+*.test
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+coverage.txt
+wails.log
+wailsbuild.log
+
+# Node / React
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+.vscode/
+*.local
+.env
+.env.*
+
+# Misc
+Thumbs.db
