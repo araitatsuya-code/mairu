@@ -6,6 +6,7 @@
 1. コンテキスト確認
    - [`docs/gmail_cleaner_design_v2.md`](gmail_cleaner_design_v2.md) を読む。
    - 実装状況は `README.md` を参照。
+   - 着手順は [`docs/TASKS.md`](TASKS.md) を参照。
 2. ユーザー依頼には具体的なゴールを書いてもらう（例: 「Gmailクライアントの骨組みを作成」）。
 3. 複数ファイルにまたがる作業は Codex CLI の `/plan` で計画を立て、完了ごとに更新。
 
