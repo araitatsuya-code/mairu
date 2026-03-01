@@ -1,3 +1,4 @@
+
 # Mairu 機能設計ドキュメント
 
 - バージョン: v2.0 (Wails + React + Go)

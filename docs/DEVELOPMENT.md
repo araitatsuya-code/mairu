@@ -1,52 +1,52 @@
-# Development Guide (Codex Friendly)
+# 開発ガイド（Codex向け）
 
-This repo is optimized for working with Codex CLI agents. Follow the flow below to keep tasks predictable and low-friction.
+このリポジトリはCodex CLIエージェントでの作業を想定して調整しています。以下のフローに沿うと、再現性の高い進め方ができます。
 
-## 1. Task Intake
-1. Gather context:
-   - Read [`docs/gmail_cleaner_design_v2.md`](gmail_cleaner_design_v2.md).
-   - Check `README.md` for the current implementation status.
-2. Define the goal explicitly in the user request (e.g., "Create Gmail client skeleton" rather than "help me").
-3. When work spans multiple files, let the agent create a plan (`/plan` action in Codex CLI) so changes stay organized.
+## 1. タスク受領
+1. コンテキスト確認
+   - [`docs/gmail_cleaner_design_v2.md`](gmail_cleaner_design_v2.md) を読む。
+   - 実装状況は `README.md` を参照。
+2. ユーザー依頼には具体的なゴールを書いてもらう（例: 「Gmailクライアントの骨組みを作成」）。
+3. 複数ファイルにまたがる作業は Codex CLI の `/plan` で計画を立て、完了ごとに更新。
 
-## 2. Local Environment
-- Install Go 1.22+, Node.js 20+, and the Wails CLI.
-- Preferred package manager: `pnpm` (falls back to `npm` if unavailable).
-- Recommended helper commands (create later):
-  - `make dev` → Run `wails dev` for live reload.
-  - `make build` → Run platform builds via `wails build`.
-  - `make test` → Run `go test ./...` and frontend unit tests.
+## 2. ローカル環境
+- Go 1.22+、Node.js 20+、Wails CLI をインストール。
+- 推奨パッケージマネージャーは `pnpm`（なければ `npm`）。
+- 今後用意する想定コマンド:
+  - `make dev` → `wails dev` でライブリロード。
+  - `make build` → `wails build` で各OSビルド。
+  - `make test` → `go test ./...` + フロントエンドのユニットテスト。
 
-Until a `Makefile` exists, run the commands directly.
+`Makefile` が整うまでは各コマンドを直接実行してください。
 
-## 3. Directory Conventions
-- `app.go` exposes Go methods to the React frontend via Wails bindings.
-- `internal/gmail`, `internal/claude`, `internal/db`, `internal/auth` host service-specific code.
-- `frontend/src/pages/*` should align with the feature areas (Classify, Blocklist, Export, Migration, Settings).
-- Keep cross-cutting types (mail models, shared DTOs) under `internal/types` once created.
+## 3. ディレクトリ規約
+- `app.go`: Wails経由でフロントエンドから呼べるGoメソッドを公開。
+- `internal/gmail`, `internal/claude`, `internal/db`, `internal/auth`: ドメインごとの処理を配置。
+- `frontend/src/pages/*`: Classify/Blocklist/Export/Migration/Settings等の画面に対応。
+- 横断的な型（メールモデルや共有DTO）は `internal/types` を作成して集約する方針。
 
-## 4. Working With Codex CLI
-- **Use short commands**: prefer `rg`, `ls`, `sed` over heavier alternatives.
-- **Never revert user changes** unless explicitly requested.
-- **Quote files** when referencing them in responses (`path/to/file:42`).
-- **Tests**: describe how to verify results whenever the agent cannot run them.
-- **Networking**: sandbox is restricted; ask for approval only when unavoidable.
+## 4. Codex CLIでの作業
+- **短いコマンドを使う**: `rg`, `ls`, `sed` など軽いツールを優先。
+- **ユーザー変更のリバート禁止**: 指示がある場合のみ。
+- **ファイル参照は引用**: 回答では `path/to/file:42` 形式で示す。
+- **テスト**: 実行できない場合は検証手順を文章で説明。
+- **ネットワーク**: 制限があるため、必要時のみ許可を求める。
 
-## 5. Branch & Commit Strategy
-- Default to the `main` branch until additional branches are required.
-- Squash commits per feature if the PR workflow prefers it; otherwise, keep each logical change atomic.
-- Include the feature/bug identifier in commit messages when available (e.g., `feat: add Gmail client skeleton`).
+## 5. ブランチ・コミット方針
+- 追加ブランチが必要になるまで `main` をデフォルトとする。
+- PRポリシーに合わせて機能単位でSquash、そうでなければ論理的な変更ごとにコミット。
+- 可能ならコミットメッセージに課題IDや内容を含める（例: `feat: Gmailクライアント骨組み追加`）。
 
-## 6. Quality Checklist Before Finishing a Task
-- [ ] Run `go fmt ./...` and `go test ./...` (once code exists).
-- [ ] Run `pnpm lint` / `pnpm test` for the frontend (once configured).
-- [ ] Ensure docs mention new config/env vars.
-- [ ] Update `README` or `docs/` when architecture or workflows change.
-- [ ] Attach verification steps in the final Codex response.
+## 6. タスク完了前の品質チェック
+- [ ] `go fmt ./...` / `go test ./...`（コード生成後）。
+- [ ] `pnpm lint` / `pnpm test`（設定後）。
+- [ ] 新しい設定値や環境変数をドキュメントで説明。
+- [ ] アーキテクチャ/ワークフロー変更時は `README` や `docs/` を更新。
+- [ ] Codexの最終応答に検証ステップを記載。
 
-## 7. Useful References
+## 7. 参考リンク
 - [Wails Docs](https://wails.io/docs/introduction)
 - [Google Gmail API for Go](https://pkg.go.dev/google.golang.org/api/gmail/v1)
 - [Claude API](https://docs.anthropic.com/)
 
-Update this guide as tooling or workflows evolve so future Codex sessions stay smooth.
+ツールやプロセスが変わったら本ガイドも更新して、次回以降のCodex作業がスムーズになるようにしてください。
