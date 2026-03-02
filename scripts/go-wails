@@ -1,0 +1,11 @@
+#!/bin/sh
+
+EXTRA_LDFLAGS="-framework UniformTypeIdentifiers"
+
+if [ -n "${CGO_LDFLAGS:-}" ]; then
+  export CGO_LDFLAGS="${CGO_LDFLAGS} ${EXTRA_LDFLAGS}"
+else
+  export CGO_LDFLAGS="${EXTRA_LDFLAGS}"
+fi
+
+exec go "$@"

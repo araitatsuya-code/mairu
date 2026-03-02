@@ -26,6 +26,8 @@
 - [ ] ブランチ名にローカル issue ID を含めた
 - [ ] コミットメッセージにローカル issue ID を含めた
 - [ ] `docs/ISSUES.md` の対象 issue と整合している
+- [ ] `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` を使って完了コメントを残す
+- [ ] マージ後に対象 issue を `status: done` にしてクローズする
 
 ## 動作確認
 

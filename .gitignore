@@ -18,6 +18,8 @@ wailsbuild.log
 
 # Node / React
 node_modules/
+frontend/wailsjs/
+frontend/package.json.md5
 .npm/
 .pnpm-store/
 .yarn/

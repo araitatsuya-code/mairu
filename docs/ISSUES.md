@@ -7,45 +7,51 @@
 - ブランチ名、コミットメッセージ、PR 説明にはローカル ID（例: `MAIRU-004`）を含める。
 - GitHub Issue を作る場合は、タイトル先頭にもローカル ID を残す（例: `[MAIRU-004] OAuth PKCE フロー実装`）。
 - GitHub Issue 番号が発行されたら、PR には `MAIRU-004 / #12` のように両方を書く。
+- GitHub Issue を作成したら、このファイルの一覧にも issue 番号を反映する。
+- 着手したら GitHub Issue に `status: in progress` ラベルを付け、担当者を assignee に設定する。
+- 完了したら `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` を使ってコメントを残し、GitHub Issue の状態を `status: done` に更新してクローズする。
 - 1つの変更で複数 issue にまたがる場合でも、主担当 issue を 1 つ決めてから着手する。
 
 ## ステータス定義
 - `ready`: 着手可能
+- `in progress`: 作業中
 - `blocked`: 依存 issue 待ち
 - `backlog`: まだ着手しない
+- `done`: 完了してクローズ済み
 
 ## 優先順サマリー
 
-| ローカル ID | 状態 | フェーズ | 概要 | 依存 |
-| --- | --- | --- | --- | --- |
-| MAIRU-001 | ready | 準備 | Wails 初期化と開発コマンド整備 | なし |
-| MAIRU-002 | blocked | 準備 | Go パッケージ骨組みと共有 DTO の作成 | MAIRU-001 |
-| MAIRU-003 | blocked | Phase 1 | Settings 画面の雛形と初期化フロー | MAIRU-001 |
-| MAIRU-004 | blocked | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
-| MAIRU-005 | blocked | Phase 1 | キーチェーン連携と機密情報保護 | MAIRU-004 |
-| MAIRU-006 | blocked | Phase 1 | Gmail API クライアント初期化と接続確認 | MAIRU-004, MAIRU-005 |
-| MAIRU-007 | blocked | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
-| MAIRU-008 | blocked | Phase 2 | 分類確認画面と信頼度分岐 UI | MAIRU-003, MAIRU-007 |
-| MAIRU-009 | blocked | Phase 2 | Gmail アクション実行とラベル管理 | MAIRU-006, MAIRU-008 |
-| MAIRU-010 | blocked | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
-| MAIRU-011 | blocked | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
-| MAIRU-012 | blocked | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
-| MAIRU-013 | blocked | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
-| MAIRU-014 | blocked | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
-| MAIRU-015 | backlog | Phase 5 | 移行アシスタント | MAIRU-012 |
-| MAIRU-016 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
-| MAIRU-017 | backlog | v2+ | AI アシスタント機能 | MAIRU-014 |
+| ローカル ID | GitHub | 状態 | フェーズ | 概要 | 依存 |
+| --- | --- | --- | --- | --- | --- |
+| MAIRU-001 | #1 | done | 準備 | Wails 初期化と開発コマンド整備 | なし |
+| MAIRU-002 | #2 | ready | 準備 | Go パッケージ骨組みと共有 DTO の作成 | MAIRU-001 |
+| MAIRU-003 | #3 | ready | Phase 1 | Settings 画面の雛形と初期化フロー | MAIRU-001 |
+| MAIRU-004 | #4 | blocked | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
+| MAIRU-005 | #5 | blocked | Phase 1 | キーチェーン連携と機密情報保護 | MAIRU-004 |
+| MAIRU-006 | #6 | blocked | Phase 1 | Gmail API クライアント初期化と接続確認 | MAIRU-004, MAIRU-005 |
+| MAIRU-007 | #7 | blocked | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
+| MAIRU-008 | #8 | blocked | Phase 2 | 分類確認画面と信頼度分岐 UI | MAIRU-003, MAIRU-007 |
+| MAIRU-009 | #9 | blocked | Phase 2 | Gmail アクション実行とラベル管理 | MAIRU-006, MAIRU-008 |
+| MAIRU-010 | #10 | blocked | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
+| MAIRU-011 | #11 | blocked | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
+| MAIRU-012 | #12 | blocked | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
+| MAIRU-013 | #13 | blocked | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
+| MAIRU-014 | #14 | blocked | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
+| MAIRU-015 | 未作成 | backlog | Phase 5 | 移行アシスタント | MAIRU-012 |
+| MAIRU-016 | 未作成 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
+| MAIRU-017 | 未作成 | backlog | v2+ | AI アシスタント機能 | MAIRU-014 |
 
 ## Issue 詳細
 
 ### MAIRU-001: Wails 初期化と開発コマンド整備
-- 状態: `ready`
+- 状態: `done`
 - フェーズ: 準備
+- GitHub: `#1`
 - 目的: 開発に必要な最小構成を作り、ローカルで起動・ビルド・テストの入口をそろえる。
 - 対応内容:
   - `wails init` による初期プロジェクト生成
   - `main.go` `app.go` `frontend/` `build/` の基本構成整理
-  - `pnpm` の初期化
+  - `npm` によるフロントエンド依存管理の初期化
   - `Makefile` に `make dev` `make build` `make test` を定義
 - 完了条件:
   - `wails dev` が起動する
@@ -53,7 +59,7 @@
   - 基本コマンドの入口が README または Makefile から分かる
 
 ### MAIRU-002: Go パッケージ骨組みと共有 DTO の作成
-- 状態: `blocked`
+- 状態: `ready`
 - フェーズ: 準備
 - 依存: `MAIRU-001`
 - 目的: バックエンドの実装先を先に固定し、後続 issue で迷わないようにする。
@@ -66,7 +72,7 @@
   - 共有 DTO の置き場が明確になる
 
 ### MAIRU-003: Settings 画面の雛形と初期化フロー
-- 状態: `blocked`
+- 状態: `ready`
 - フェーズ: Phase 1
 - 依存: `MAIRU-001`
 - 目的: 認証状態、設定不足、起動時の初期状態を UI から扱えるようにする。
@@ -281,3 +287,11 @@
 2. `.github/ISSUE_TEMPLATE/task-from-backlog.md` を使って GitHub Issue を作る。
 3. GitHub で採番された番号を PR と作業メモに追記する。
 4. 実装中は `docs/TASKS.md` ではなく、この issue 単位で進捗を管理する。
+
+## 完了時のクローズ手順
+1. 対応内容と完了条件を満たしていることを確認する。
+2. `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` を使って、対応内容・検証結果・関連 PR を issue にコメントする。
+3. GitHub Issue から `status: in progress` など着手中のラベルを外す。
+4. GitHub Issue に `status: done` を付ける。
+5. PR や検証結果を issue に紐付けたうえで issue をクローズする。
+6. 必要ならこのファイルの状態も `done` または完了済みとして更新する。
