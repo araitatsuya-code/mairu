@@ -8,7 +8,9 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 ## 現在の状態
 - ✅ `gmail_cleaner_design_v2.docx` をMarkdownへ取り込み済み。
 - ✅ Wails v2 + React (TypeScript) の初期スキャフォールドを配置済み。
-- ✅ `MAIRU-001 / #1` を完了し、`MAIRU-002 / #2` と `MAIRU-003 / #3` が着手可能。
+- ✅ `MAIRU-001 / #1` を完了し、Wails の起動・ビルド・テスト導線を整備済み。
+- ✅ `MAIRU-002 / #2` を完了し、`internal/` の Go パッケージ骨組みと共有 DTO を追加済み。
+- ✅ `MAIRU-003 / #3` と `MAIRU-010 / #10` が着手可能。
 
 ## 必要環境（開発開始時）
 - Go 1.22+
@@ -36,8 +38,8 @@ mairu/
 macOS では `UniformTypeIdentifiers` のリンク設定を `Makefile` 側で補っています。
 
 ## 次のアクション
-1. `MAIRU-002 / #2` に進み、Go パッケージ骨組みと共有 DTO の置き場を整える。
-2. `MAIRU-003 / #3` に進み、Settings 画面の雛形と初期化導線を整える。
+1. `MAIRU-003 / #3` に進み、Settings 画面の雛形と初期化導線を整える。
+2. `MAIRU-010 / #10` に進み、SQLite 初期化とスキーマの土台を作る。
 3. 設計ドキュメント各章を Go / React モジュールとして具体化していく。
 
 Codexとの協調作業手順などは [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) を参照してください。
