@@ -1,12 +1,25 @@
 SHELL := /bin/sh
 
 GOCACHE_DIR ?= /tmp/mairu-go-build-cache
-WAILS_CGO_LDFLAGS ?= -framework UniformTypeIdentifiers
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  WAILS_CGO_LDFLAGS ?= -framework UniformTypeIdentifiers
+else
+  WAILS_CGO_LDFLAGS ?=
+endif
 WAILS ?= $(shell if command -v wails >/dev/null 2>&1; then command -v wails; elif [ -x "$$HOME/go/bin/wails" ]; then printf "%s/go/bin/wails" "$$HOME"; fi)
 WAILS_COMPILER ?= $(CURDIR)/scripts/go-wails
 NPM ?= $(shell command -v npm)
 
-.PHONY: check-wails frontend-install frontend-build frontend-test dev build test
+.PHONY: all check-wails check-npm frontend-install frontend-build frontend-test dev build test clean
+
+all: build
+
+check-npm:
+	@if [ -z "$(NPM)" ]; then \
+		echo "npm が見つかりません。Node.js をインストールしてください。"; \
+		exit 1; \
+	fi
 
 check-wails:
 	@if [ -z "$(WAILS)" ]; then \
@@ -14,13 +27,13 @@ check-wails:
 		exit 1; \
 	fi
 
-frontend-install:
+frontend-install: check-npm
 	cd frontend && $(NPM) install
 
-frontend-build:
+frontend-build: frontend-install
 	cd frontend && $(NPM) run build
 
-frontend-test:
+frontend-test: check-npm
 	cd frontend && $(NPM) run test
 
 dev: check-wails
@@ -33,3 +46,7 @@ build: frontend-build
 test:
 	GOCACHE=$(GOCACHE_DIR) go test ./...
 	$(MAKE) frontend-test
+
+clean:
+	rm -rf build/bin
+	cd frontend && rm -rf node_modules dist
