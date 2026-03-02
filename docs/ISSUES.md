@@ -24,7 +24,7 @@
 | ローカル ID | GitHub | 状態 | フェーズ | 概要 | 依存 |
 | --- | --- | --- | --- | --- | --- |
 | MAIRU-001 | #1 | done | 準備 | Wails 初期化と開発コマンド整備 | なし |
-| MAIRU-002 | #2 | ready | 準備 | Go パッケージ骨組みと共有 DTO の作成 | MAIRU-001 |
+| MAIRU-002 | #2 | done | 準備 | Go パッケージ骨組みと共有 DTO の作成 | MAIRU-001 |
 | MAIRU-003 | #3 | ready | Phase 1 | Settings 画面の雛形と初期化フロー | MAIRU-001 |
 | MAIRU-004 | #4 | blocked | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
 | MAIRU-005 | #5 | blocked | Phase 1 | キーチェーン連携と機密情報保護 | MAIRU-004 |
@@ -32,7 +32,7 @@
 | MAIRU-007 | #7 | blocked | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
 | MAIRU-008 | #8 | blocked | Phase 2 | 分類確認画面と信頼度分岐 UI | MAIRU-003, MAIRU-007 |
 | MAIRU-009 | #9 | blocked | Phase 2 | Gmail アクション実行とラベル管理 | MAIRU-006, MAIRU-008 |
-| MAIRU-010 | #10 | blocked | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
+| MAIRU-010 | #10 | ready | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
 | MAIRU-011 | #11 | blocked | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
 | MAIRU-012 | #12 | blocked | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
 | MAIRU-013 | #13 | blocked | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
@@ -59,7 +59,7 @@
   - 基本コマンドの入口が README または Makefile から分かる
 
 ### MAIRU-002: Go パッケージ骨組みと共有 DTO の作成
-- 状態: `ready`
+- 状態: `done`
 - フェーズ: 準備
 - 依存: `MAIRU-001`
 - 目的: バックエンドの実装先を先に固定し、後続 issue で迷わないようにする。
@@ -167,7 +167,7 @@
   - ラベル付与と削除が最低限機能する
 
 ### MAIRU-010: SQLite 初期化、スキーマ、マイグレーション
-- 状態: `blocked`
+- 状態: `ready`
 - フェーズ: Phase 3
 - 依存: `MAIRU-002`
 - 目的: ブロックリスト、ログ、設定の永続化基盤を整える。
