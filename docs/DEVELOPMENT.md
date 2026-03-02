@@ -11,6 +11,8 @@
 2. ユーザー依頼には具体的なゴールを書いてもらう（例: 「Gmailクライアントの骨組みを作成」）。
 3. まず 1 つの issue を主担当として決め、依存関係を確認してから着手する。
 4. 複数ファイルにまたがる作業は Codex CLI の `/plan` で計画を立て、完了ごとに更新。
+5. 着手した issue は GitHub 側で `status: in progress` にし、担当者を assignee に設定する。
+6. 完了した issue は `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` で完了コメントを残し、`status: done` に更新してからクローズする。
 
 ## 2. ローカル環境
 - Go 1.22+、Node.js 20+、Wails CLI をインストール。
@@ -46,6 +48,9 @@
 - `docs/TASKS.md` は全体計画、`docs/ISSUES.md` は実装単位の backlog として扱う。
 - 新しい作業を始める前に、対象 issue の依存が解消されているか確認する。
 - GitHub で issue を作る場合は `.github/ISSUE_TEMPLATE/task-from-backlog.md` を使い、ローカル ID をタイトルに残す。
+- 作業開始時は GitHub Issue に `status: in progress` を付け、開始前の状態ラベルを外す。
+- 作業完了時は `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` を使って完了コメントを残す。
+- その後、GitHub Issue に `status: done` を付け、未完了ステータスを外してクローズする。
 - PR にはローカル ID と GitHub issue 番号（あれば両方）を記載する。
 
 ## 7. タスク完了前の品質チェック

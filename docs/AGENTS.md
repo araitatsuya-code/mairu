@@ -33,6 +33,8 @@ Codexエージェントがこのリポジトリで作業するときの運用ル
 - 着手前に `docs/ISSUES.md` から対象 issue を 1 つ選び、依存が解消されていることを確認する。
 - ブランチ名、コミットメッセージ、PR 説明にはローカル issue ID（例: `MAIRU-004`）を含める。
 - GitHub Issue を作る場合は `.github/ISSUE_TEMPLATE/task-from-backlog.md` を使い、タイトルにローカル issue ID を残す。
+- 着手した issue は GitHub 上で `status: in progress` にし、担当者を assignee に設定する。
+- 完了した issue は `.github/ISSUE_CLOSE_COMMENT_TEMPLATE.md` でコメントを残し、GitHub 上で `status: done` にしてからクローズする。
 
 ## 7. コミット・プッシュ
 1. `git status -sb` で対象ファイルのみが変更されていることを確認。
