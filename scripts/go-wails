@@ -1,18 +1,10 @@
 #!/bin/sh
 
-# macOS でのみ UniformTypeIdentifiers フレームワークをリンク
-case "$(uname -s)" in
-  Darwin)
-    EXTRA_LDFLAGS="-framework UniformTypeIdentifiers"
-    ;;
-  *)
-    EXTRA_LDFLAGS=""
-    ;;
-esac
+EXTRA_LDFLAGS="-framework UniformTypeIdentifiers"
 
-if [ -n "${EXTRA_LDFLAGS}" ] && [ -n "${CGO_LDFLAGS:-}" ]; then
+if [ -n "${CGO_LDFLAGS:-}" ]; then
   export CGO_LDFLAGS="${CGO_LDFLAGS} ${EXTRA_LDFLAGS}"
-elif [ -n "${EXTRA_LDFLAGS}" ]; then
+else
   export CGO_LDFLAGS="${EXTRA_LDFLAGS}"
 fi
 

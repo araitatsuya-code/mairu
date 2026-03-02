@@ -11,13 +11,13 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 - ✅ `MAIRU-001 / #1` を完了し、`MAIRU-002 / #2` と `MAIRU-003 / #3` が着手可能。
 
 ## 必要環境（開発開始時）
-- Go 1.24+
+- Go 1.22+
 - Node.js 20+（Wails Reactテンプレートが要求するバージョン）
 - Wails CLI（`go install github.com/wailsapp/wails/v2/cmd/wails@latest`）
 - npm（フロントエンド依存管理）
 
 ## 推奨ディレクトリ構成
-```text
+```
 mairu/
 ├── frontend/         # React + Viteアプリ（Wailsテンプレート）
 ├── internal/         # Goパッケージ（gmail, claude, db, auth, ...）
