@@ -1,19 +1,17 @@
 import './App.css';
 import { useEffect, useState } from 'react';
 
-import { loadAppName, loadRuntimeStatus, type RuntimeStatus } from './lib/runtime';
+import {
+    defaultRuntimeStatus,
+    loadAppName,
+    loadRuntimeStatus,
+    type RuntimeStatus,
+} from './lib/runtime';
 import { SettingsPage } from './pages/Settings/SettingsPage';
-
-const initialStatus: RuntimeStatus = {
-    authorized: false,
-    claudeConfigured: false,
-    databaseReady: false,
-    lastRunAt: null,
-};
 
 function App() {
     const [appName, setAppName] = useState('Mairu');
-    const [status, setStatus] = useState<RuntimeStatus>(initialStatus);
+    const [status, setStatus] = useState<RuntimeStatus>(defaultRuntimeStatus);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 

@@ -32,7 +32,7 @@ declare global {
     }
 }
 
-const fallbackStatus: RuntimeStatus = {
+export const defaultRuntimeStatus: RuntimeStatus = {
     authorized: false,
     claudeConfigured: false,
     databaseReady: false,
@@ -57,7 +57,7 @@ export async function loadRuntimeStatus(): Promise<RuntimeStatus> {
     const raw = result ? await result : null;
 
     if (!raw) {
-        return fallbackStatus;
+        return defaultRuntimeStatus;
     }
 
     return {
