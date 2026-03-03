@@ -1,10 +1,18 @@
 import './SettingsPage.css';
 
-import type { RuntimeStatus } from '../../lib/runtime';
+import { useState } from 'react';
+
+import {
+    cancelGoogleLogin,
+    startGoogleLogin,
+    type GoogleLoginResult,
+    type RuntimeStatus,
+} from '../../lib/runtime';
 
 type SettingsPageProps = {
     appName: string;
     status: RuntimeStatus;
+    onStatusRefresh: () => Promise<RuntimeStatus>;
 };
 
 type StatusCardProps = {
@@ -41,11 +49,85 @@ function formatLastRun(lastRunAt: string | null): string {
     }).format(parsed);
 }
 
-export function SettingsPage({ appName, status }: SettingsPageProps) {
+export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageProps) {
+    const [loginPending, setLoginPending] = useState(false);
+    const [loginError, setLoginError] = useState<string | null>(null);
+    const [lastLoginResult, setLastLoginResult] = useState<GoogleLoginResult | null>(null);
+    const [loginNote, setLoginNote] = useState<string | null>(null);
+    const googleStateLabel = status.authorized
+        ? '認可コード取得済み'
+        : status.googleConfigured
+          ? 'ログイン可能'
+          : 'Client ID待ち';
+
+    async function refreshStatusSafely(fallbackMessage: string): Promise<boolean> {
+        try {
+            await onStatusRefresh();
+            return true;
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : fallbackMessage;
+            setLoginError(message);
+            return false;
+        }
+    }
+
+    async function handleGoogleLogin() {
+        setLoginPending(true);
+        setLoginError(null);
+        setLastLoginResult(null);
+        setLoginNote(null);
+
+        try {
+            const result = await startGoogleLogin();
+            setLastLoginResult(result);
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'Google ログインに失敗しました。';
+            if (message.includes('中断しました') || message.includes('context canceled')) {
+                setLoginNote('ログイン処理を中断しました。再試行できます。');
+            } else {
+                setLoginError(message);
+            }
+        } finally {
+            await refreshStatusSafely('状態の再取得に失敗しました。');
+            setLoginPending(false);
+        }
+    }
+
+    async function handleCancelLogin() {
+        setLoginNote('中断しています...');
+        setLoginError(null);
+
+        try {
+            const cancelled = await cancelGoogleLogin();
+            if (!cancelled) {
+                setLoginNote('中断対象のログインが見つかりませんでした。');
+                return;
+            }
+
+            const refreshed = await refreshStatusSafely('状態の再取得に失敗しました。');
+            if (refreshed) {
+                setLoginNote(null);
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'ログイン中断に失敗しました。';
+            setLoginError(message);
+            setLoginNote(null);
+        }
+    }
+
     return (
         <div className="settings-page">
             <section className="settings-hero">
-                <p className="settings-eyebrow">MAIRU-003 / #3</p>
+                <p className="settings-eyebrow">MAIRU-004 / #4</p>
                 <h1>{appName} 設定ハブ</h1>
                 <p className="settings-lead">
                     起動直後に必要な初期状態をここで確認し、OAuth、Claude API キー、
@@ -56,7 +138,7 @@ export function SettingsPage({ appName, status }: SettingsPageProps) {
             <section className="settings-status-grid" aria-label="初期状態サマリー">
                 <StatusCard
                     label="Google 認証"
-                    readyLabel="接続済み"
+                    readyLabel="認可コード取得済み"
                     pendingLabel="未接続"
                     ready={status.authorized}
                 />
@@ -86,12 +168,61 @@ export function SettingsPage({ appName, status }: SettingsPageProps) {
                             <div className="settings-item-header">
                                 <h3 className="settings-item-title">Google OAuth ログイン</h3>
                                 <span className={`state-chip ${status.authorized ? 'ready' : 'pending'}`}>
-                                    {status.authorized ? '利用可能' : '準備中'}
+                                    {googleStateLabel}
                                 </span>
                             </div>
                             <p className="settings-item-body">
-                                PKCE ログインと localhost リダイレクト受信の実装をここへ接続します。
+                                Google OAuth の PKCE フローを使い、ブラウザ起動から localhost
+                                リダイレクト受信までをこの場で完結させます。
                             </p>
+                            <div className="settings-action-stack">
+                                <div className="settings-action-row">
+                                    <button
+                                        className="settings-action-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleGoogleLogin();
+                                        }}
+                                        disabled={loginPending || !status.googleConfigured}
+                                    >
+                                        {loginPending ? 'Google ログイン待機中...' : 'Google でログイン'}
+                                    </button>
+                                    {loginPending ? (
+                                        <button
+                                            className="settings-cancel-button"
+                                            type="button"
+                                            onClick={() => {
+                                                void handleCancelLogin();
+                                            }}
+                                        >
+                                            中断
+                                        </button>
+                                    ) : null}
+                                </div>
+                                <p className="settings-inline-note">{status.authStatus}</p>
+                                {lastLoginResult ? (
+                                    <dl className="settings-result-grid">
+                                        <div>
+                                            <dt>結果</dt>
+                                            <dd>{lastLoginResult.message}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>認可コード</dt>
+                                            <dd>{lastLoginResult.codePreview || '受信済み'}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>リダイレクト</dt>
+                                            <dd>{lastLoginResult.redirectURL}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>スコープ</dt>
+                                            <dd>{lastLoginResult.scopes.join(', ')}</dd>
+                                        </div>
+                                    </dl>
+                                ) : null}
+                                {loginNote ? <p className="settings-inline-note">{loginNote}</p> : null}
+                                {loginError ? <p className="settings-error-note">{loginError}</p> : null}
+                            </div>
                         </li>
                         <li className="settings-item">
                             <div className="settings-item-header">

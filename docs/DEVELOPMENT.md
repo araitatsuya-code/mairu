@@ -44,6 +44,16 @@
 - ブランチを切る場合は `codex/mairu-004-oauth-pkce` のように issue ID を含める。
 - コミットメッセージにも issue ID を含める（例: `feat: MAIRU-004 OAuth PKCE フロー追加`）。
 
+### ブランチ作成（コンフリクト予防）
+`main` が進んでいる状態で古いローカルからブランチを切るとコンフリクトになりやすいので、**ブランチ作成前に必ず fetch して最新の `origin/main` から切る**運用にします。
+
+推奨（スクリプト利用）:
+- `./scripts/new-branch.sh codex/mairu-XXX-short origin/main`
+
+手動でやる場合:
+- `git fetch --all --prune`
+- `git switch -c codex/mairu-XXX-short origin/main`
+
 ## 6. Issue 駆動の進め方
 - `docs/TASKS.md` は全体計画、`docs/ISSUES.md` は実装単位の backlog として扱う。
 - 新しい作業を始める前に、対象 issue の依存が解消されているか確認する。
