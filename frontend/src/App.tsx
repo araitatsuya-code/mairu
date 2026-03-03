@@ -1,29 +1,78 @@
 import './App.css';
+import { useEffect, useState } from 'react';
 
-const bootstrapSteps = [
-    'Wails の基本構成を初期化済み',
-    'React + TypeScript のフロントエンドを配置済み',
-    '次は Settings 画面と OAuth 導線を実装する',
-];
+import { loadAppName, loadRuntimeStatus, type RuntimeStatus } from './lib/runtime';
+import { SettingsPage } from './pages/Settings/SettingsPage';
+
+const initialStatus: RuntimeStatus = {
+    authorized: false,
+    claudeConfigured: false,
+    databaseReady: false,
+    lastRunAt: null,
+};
 
 function App() {
+    const [appName, setAppName] = useState('Mairu');
+    const [status, setStatus] = useState<RuntimeStatus>(initialStatus);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function initialize() {
+            try {
+                const [nextAppName, nextStatus] = await Promise.all([
+                    loadAppName(),
+                    loadRuntimeStatus(),
+                ]);
+
+                if (cancelled) {
+                    return;
+                }
+
+                setAppName(nextAppName);
+                setStatus(nextStatus);
+            } catch (cause) {
+                if (cancelled) {
+                    return;
+                }
+
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '初期設定の読み込みに失敗しました。';
+                setError(message);
+            } finally {
+                if (!cancelled) {
+                    setLoading(false);
+                }
+            }
+        }
+
+        void initialize();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
     return (
         <div className="app-shell">
-            <main className="hero-card">
-                <p className="eyebrow">MAIRU-001 / #1</p>
-                <h1>Mairu 開発ブートストラップ</h1>
-                <p className="lead">
-                    Wails と React の土台を作成しました。Gmail 整理アプリの実装は、
-                    この土台の上に段階的に積み上げます。
-                </p>
-                <section className="status-panel">
-                    <h2>現在の状態</h2>
-                    <ul className="step-list">
-                        {bootstrapSteps.map((step) => (
-                            <li key={step}>{step}</li>
-                        ))}
-                    </ul>
-                </section>
+            <main className="app-frame">
+                {loading ? (
+                    <section className="app-loading">
+                        <h1>初期設定を確認しています</h1>
+                        <p>起動時に必要な状態を読み込み、Settings 画面を準備しています。</p>
+                    </section>
+                ) : error ? (
+                    <section className="app-error">
+                        <h1>初期化に失敗しました</h1>
+                        <p>{error}</p>
+                    </section>
+                ) : (
+                    <SettingsPage appName={appName} status={status} />
+                )}
             </main>
         </div>
     );
