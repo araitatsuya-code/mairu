@@ -26,7 +26,7 @@
 | MAIRU-001 | #1 | done | 準備 | Wails 初期化と開発コマンド整備 | なし |
 | MAIRU-002 | #2 | done | 準備 | Go パッケージ骨組みと共有 DTO の作成 | MAIRU-001 |
 | MAIRU-003 | #3 | done | Phase 1 | Settings 画面の雛形と初期化フロー | MAIRU-001 |
-| MAIRU-004 | #4 | ready | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
+| MAIRU-004 | #4 | done | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
 | MAIRU-005 | #5 | blocked | Phase 1 | キーチェーン連携と機密情報保護 | MAIRU-004 |
 | MAIRU-006 | #6 | blocked | Phase 1 | Gmail API クライアント初期化と接続確認 | MAIRU-004, MAIRU-005 |
 | MAIRU-007 | #7 | blocked | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
@@ -85,7 +85,7 @@
   - 後続の OAuth / API キー実装を UI に接続できる
 
 ### MAIRU-004: Google OAuth PKCE ログイン実装
-- 状態: `ready`
+- 状態: `done`
 - フェーズ: Phase 1
 - 依存: `MAIRU-001`, `MAIRU-003`
 - 目的: Google ログインから認可コード取得までのフローをローカルアプリとして成立させる。

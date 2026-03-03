@@ -15,15 +15,18 @@ function App() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    async function refreshRuntimeStatus(): Promise<RuntimeStatus> {
+        const nextStatus = await loadRuntimeStatus();
+        setStatus(nextStatus);
+        return nextStatus;
+    }
+
     useEffect(() => {
         let cancelled = false;
 
         async function initialize() {
             try {
-                const [nextAppName, nextStatus] = await Promise.all([
-                    loadAppName(),
-                    loadRuntimeStatus(),
-                ]);
+                const [nextAppName, nextStatus] = await Promise.all([loadAppName(), loadRuntimeStatus()]);
 
                 if (cancelled) {
                     return;
@@ -69,7 +72,11 @@ function App() {
                         <p>{error}</p>
                     </section>
                 ) : (
-                    <SettingsPage appName={appName} status={status} />
+                    <SettingsPage
+                        appName={appName}
+                        status={status}
+                        onStatusRefresh={refreshRuntimeStatus}
+                    />
                 )}
             </main>
         </div>
