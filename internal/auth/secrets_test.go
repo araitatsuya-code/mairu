@@ -95,3 +95,50 @@ func TestMaskSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestNewSecretManagerPanicsOnNilStore(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("NewSecretManager(nil) did not panic")
+		}
+	}()
+
+	NewSecretManager(nil)
+}
+
+func TestSecretManagerHasGoogleTokenRejectsBrokenPayload(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemorySecretStore()
+	manager := NewSecretManager(store)
+
+	if err := store.SetSecret(context.Background(), googleTokenAccount, []byte("not-json")); err != nil {
+		t.Fatalf("SetSecret returned error: %v", err)
+	}
+
+	ok, err := manager.HasGoogleToken(context.Background())
+	if err == nil {
+		t.Fatalf("HasGoogleToken returned nil error, want error")
+	}
+	if ok {
+		t.Fatalf("HasGoogleToken = true, want false")
+	}
+}
+
+func TestSecretManagerLoadGoogleTokenRejectsEmptyAccessToken(t *testing.T) {
+	t.Parallel()
+
+	store := NewMemorySecretStore()
+	manager := NewSecretManager(store)
+
+	if err := store.SetSecret(context.Background(), googleTokenAccount, []byte(`{"refresh_token":"only-refresh"}`)); err != nil {
+		t.Fatalf("SetSecret returned error: %v", err)
+	}
+
+	_, err := manager.LoadGoogleToken(context.Background())
+	if err == nil {
+		t.Fatalf("LoadGoogleToken returned nil error, want error")
+	}
+}

@@ -59,6 +59,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [claudeApiKey, setClaudeApiKey] = useState('');
     const [claudePending, setClaudePending] = useState(false);
     const [claudeError, setClaudeError] = useState<string | null>(null);
+    const claudeApiKeyBlank = claudeApiKey.trim() === "";
     const googleStateLabel = status.authorized
         ? 'トークン保存済み'
         : status.googleConfigured
@@ -130,6 +131,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     }
 
     async function handleSaveClaudeAPIKey() {
+        if (claudeApiKeyBlank) {
+            setClaudeError('Claude API キーを入力してください。');
+            return;
+        }
+
         setClaudePending(true);
         setClaudeError(null);
 
@@ -316,7 +322,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                         onClick={() => {
                                             void handleSaveClaudeAPIKey();
                                         }}
-                                        disabled={claudePending}
+                                        disabled={claudePending || claudeApiKeyBlank}
                                     >
                                         {claudePending ? '保存中...' : 'キーチェーンへ保存'}
                                     </button>

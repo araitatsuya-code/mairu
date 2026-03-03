@@ -134,7 +134,8 @@ func NewClient(config Config) *Client {
 
 // IsConfigured はログイン開始に必要な必須設定がそろっているか返す。
 func (c *Client) IsConfigured() bool {
-	return strings.TrimSpace(c.clientID) != ""
+	return strings.TrimSpace(c.clientID) != "" &&
+		strings.TrimSpace(c.clientSecret) != ""
 }
 
 // Scopes は現在の OAuth スコープ定義を返す。
@@ -145,7 +146,7 @@ func (c *Client) Scopes() []string {
 // RunLoginFlow はブラウザを開き、認可コード受信まで待機する。
 func (c *Client) RunLoginFlow(ctx context.Context) (LoginResult, error) {
 	if !c.IsConfigured() {
-		return LoginResult{}, errors.New("Google OAuth クライアント ID が未設定です")
+		return LoginResult{}, errors.New("Google OAuth クライアント ID または Client Secret が未設定です")
 	}
 
 	if err := c.begin(); err != nil {

@@ -55,6 +55,51 @@ func TestBuildAuthorizationURL(t *testing.T) {
 	assertQueryValue(t, query, "prompt", "consent")
 }
 
+func TestClientIsConfigured(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config Config
+		want   bool
+	}{
+		{
+			name: "client id and secret",
+			config: Config{
+				ClientID:     "client-id",
+				ClientSecret: "client-secret",
+			},
+			want: true,
+		},
+		{
+			name: "missing secret",
+			config: Config{
+				ClientID: "client-id",
+			},
+			want: false,
+		},
+		{
+			name: "missing id",
+			config: Config{
+				ClientSecret: "client-secret",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := NewClient(tt.config)
+			if got := client.IsConfigured(); got != tt.want {
+				t.Fatalf("IsConfigured() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func assertQueryValue(t *testing.T, values url.Values, key string, want string) {
 	t.Helper()
 

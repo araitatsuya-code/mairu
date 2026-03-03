@@ -36,6 +36,10 @@ type SecretManager struct {
 
 // NewSecretManager は機密情報管理を初期化する。
 func NewSecretManager(store SecretStore) *SecretManager {
+	if store == nil {
+		panic("nil SecretStore passed to NewSecretManager")
+	}
+
 	return &SecretManager{store: store}
 }
 
@@ -73,15 +77,18 @@ func (m *SecretManager) LoadGoogleToken(ctx context.Context) (TokenSet, error) {
 	if err := json.Unmarshal(payload, &token); err != nil {
 		return TokenSet{}, fmt.Errorf("保存済み OAuth トークンの復元に失敗しました: %w", err)
 	}
+	if strings.TrimSpace(token.AccessToken) == "" {
+		return TokenSet{}, errors.New("保存済み OAuth トークンにアクセストークンがありません")
+	}
 
 	return token, nil
 }
 
 // HasGoogleToken は保存済み OAuth トークンの有無を返す。
 func (m *SecretManager) HasGoogleToken(ctx context.Context) (bool, error) {
-	_, err := m.store.GetSecret(ctx, googleTokenAccount)
+	token, err := m.LoadGoogleToken(ctx)
 	if err == nil {
-		return true, nil
+		return strings.TrimSpace(token.AccessToken) != "", nil
 	}
 	if errors.Is(err, ErrSecretNotFound) {
 		return false, nil

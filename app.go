@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -96,11 +97,30 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 		}, nil
 	}
 
-	a.setAuthStatus("ブラウザを開いて Google ログインを待っています。")
+	if a.hasLoginInProgress() {
+		message := "Google ログインはすでに進行中です。完了または中断してから再試行してください。"
+		a.setAuthStatus(message)
+		return types.GoogleLoginResult{
+			Success: false,
+			Message: message,
+			Scopes:  a.authClient.Scopes(),
+		}, nil
+	}
 
 	loginContext, cancel := context.WithCancel(a.baseContext())
-	cancelSeq := a.setLoginCancel(cancel)
+	cancelSeq, ok := a.setLoginCancelIfIdle(cancel)
+	if !ok {
+		cancel()
+		message := "Google ログインはすでに進行中です。完了または中断してから再試行してください。"
+		a.setAuthStatus(message)
+		return types.GoogleLoginResult{
+			Success: false,
+			Message: message,
+			Scopes:  a.authClient.Scopes(),
+		}, nil
+	}
 	defer a.clearLoginCancel(cancelSeq)
+	a.setAuthStatus("ブラウザを開いて Google ログインを待っています。")
 
 	loginResult, err := a.authClient.RunLoginFlow(loginContext)
 	if err != nil {
@@ -114,13 +134,13 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 			}, nil
 		}
 
-		a.setAuthStatus(err.Error())
+		a.setAuthStatus(buildCredentialErrorMessage("Google ログインに失敗しました。", err))
 		return types.GoogleLoginResult{}, err
 	}
 
 	tokenSet, err := a.authClient.ExchangeCode(loginContext, loginResult)
 	if err != nil {
-		a.setAuthStatus(err.Error())
+		a.setAuthStatus(buildCredentialErrorMessage("Google トークン交換に失敗しました。", err))
 		return types.GoogleLoginResult{}, err
 	}
 
@@ -217,13 +237,24 @@ func (a *App) setClaudeStatus(status string) {
 	a.mu.Unlock()
 }
 
-func (a *App) setLoginCancel(cancel context.CancelFunc) uint64 {
+func (a *App) hasLoginInProgress() bool {
+	a.mu.RLock()
+	running := a.loginCancel != nil
+	a.mu.RUnlock()
+	return running
+}
+
+func (a *App) setLoginCancelIfIdle(cancel context.CancelFunc) (uint64, bool) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.loginCancel != nil {
+		return 0, false
+	}
+
 	a.loginCancelSeq++
 	a.loginCancel = cancel
-	seq := a.loginCancelSeq
-	a.mu.Unlock()
-	return seq
+	return a.loginCancelSeq, true
 }
 
 func (a *App) clearLoginCancel(seq uint64) {
@@ -236,7 +267,7 @@ func (a *App) clearLoginCancel(seq uint64) {
 
 func buildAuthStatusMessage(configured bool) string {
 	if !configured {
-		return "環境変数 MAIRU_GOOGLE_OAUTH_CLIENT_ID を設定すると Google ログインを開始できます。"
+		return "環境変数 MAIRU_GOOGLE_OAUTH_CLIENT_ID と MAIRU_GOOGLE_OAUTH_CLIENT_SECRET を設定すると Google ログインを開始できます。"
 	}
 
 	return "Google ログインを開始すると、localhost で認可コードを受け取ってキーチェーンに保存します。"
@@ -251,7 +282,8 @@ func buildStoredClaudeStatusMessage() string {
 }
 
 func buildCredentialErrorMessage(prefix string, err error) string {
-	return prefix + " " + err.Error()
+	log.Printf("%s detail=%v", prefix, err)
+	return prefix + " 詳細はアプリのログを確認してください。"
 }
 
 func shouldUseStoredAuthMessage(message string) bool {

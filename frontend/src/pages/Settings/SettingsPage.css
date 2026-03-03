@@ -212,7 +212,7 @@
         border-color 160ms ease;
 }
 
-.settings-cancel-button:hover {
+.settings-cancel-button:hover:not(:disabled) {
     transform: translateY(-1px);
     border-color: rgba(125, 211, 252, 0.35);
 }
@@ -227,6 +227,7 @@
 .settings-cancel-button:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+    transform: none;
 }
 
 .settings-field {
