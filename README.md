@@ -10,7 +10,8 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 - ✅ Wails v2 + React (TypeScript) の初期スキャフォールドを配置済み。
 - ✅ `MAIRU-001 / #1` を完了し、Wails の起動・ビルド・テスト導線を整備済み。
 - ✅ `MAIRU-002 / #2` を完了し、`internal/` の Go パッケージ骨組みと共有 DTO を追加済み。
-- ✅ `MAIRU-003 / #3` と `MAIRU-010 / #10` が着手可能。
+- ✅ `MAIRU-003 / #3` を完了し、Settings 画面の雛形と起動時初期化の入口を追加済み。
+- ✅ `MAIRU-004 / #4` と `MAIRU-010 / #10` が着手可能。
 
 ## 必要環境（開発開始時）
 - Go 1.22+
@@ -38,8 +39,8 @@ mairu/
 macOS では `UniformTypeIdentifiers` のリンク設定を `Makefile` 側で補っています。
 
 ## 次のアクション
-1. `MAIRU-003 / #3` に進み、Settings 画面の雛形と初期化導線を整える。
+1. `MAIRU-004 / #4` に進み、Google OAuth PKCE ログインを実装する。
 2. `MAIRU-010 / #10` に進み、SQLite 初期化とスキーマの土台を作る。
-3. 設計ドキュメント各章を Go / React モジュールとして具体化していく。
+3. `MAIRU-005 / #5` に向けて、キーチェーン連携の前提を整理する。
 
 Codexとの協調作業手順などは [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) を参照してください。
