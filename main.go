@@ -12,6 +12,10 @@ import (
 var assets embed.FS
 
 func main() {
+	if err := loadLocalEnv(defaultEnvFile); err != nil {
+		println("Warning:", err.Error())
+	}
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{

@@ -23,13 +23,14 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 ## Google OAuth 設定（MAIRU-004）
 - Google Cloud Console でプロジェクトを作成し、Gmail API を有効化する
 - OAuth クライアント ID は「デスクトップアプリ」で作成する
-- 起動前に `MAIRU_GOOGLE_OAUTH_CLIENT_ID` へ Client ID を設定する
+- 起動前に `MAIRU_GOOGLE_OAUTH_CLIENT_ID` と `MAIRU_GOOGLE_OAUTH_CLIENT_SECRET` を設定する
 - 現在のログインフローでは `gmail.modify` `gmail.labels` `openid` `email` `profile` を要求する
 
 毎回 `export` するのが面倒な場合は、リポジトリ直下に `.env.local` を作成してください（`make dev` が自動で読み込みます）。
 
 ```bash
 MAIRU_GOOGLE_OAUTH_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"
+MAIRU_GOOGLE_OAUTH_CLIENT_SECRET="YOUR_GOOGLE_CLIENT_SECRET"
 ```
 
 `.env.local` はローカル専用（gitignore 対象）として扱い、必要なら `chmod 600 .env.local` で権限を絞ってください。

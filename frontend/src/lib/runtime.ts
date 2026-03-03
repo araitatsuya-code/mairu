@@ -3,6 +3,7 @@ export type RuntimeStatus = {
     googleConfigured: boolean;
     authStatus: string;
     claudeConfigured: boolean;
+    claudeStatus: string;
     databaseReady: boolean;
     lastRunAt: string | null;
 };
@@ -12,8 +13,15 @@ export type GoogleLoginResult = {
     message: string;
     authorizationURL: string;
     redirectURL: string;
-    codePreview: string;
+    tokenStored: boolean;
+    refreshTokenStored: boolean;
+    storedPreview: string;
     scopes: string[];
+};
+
+export type SecretOperationResult = {
+    success: boolean;
+    message: string;
 };
 
 type WailsAppApi = {
@@ -24,6 +32,7 @@ type WailsAppApi = {
               GoogleConfigured: boolean;
               AuthStatus: string;
               ClaudeConfigured: boolean;
+              ClaudeStatus: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           }>
@@ -32,6 +41,7 @@ type WailsAppApi = {
               GoogleConfigured: boolean;
               AuthStatus: string;
               ClaudeConfigured: boolean;
+              ClaudeStatus: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           };
@@ -41,7 +51,9 @@ type WailsAppApi = {
               Message: string;
               AuthorizationURL: string;
               RedirectURL: string;
-              CodePreview: string;
+              TokenStored: boolean;
+              RefreshTokenStored: boolean;
+              StoredPreview: string;
               Scopes?: string[];
           }>
         | {
@@ -49,10 +61,30 @@ type WailsAppApi = {
               Message: string;
               AuthorizationURL: string;
               RedirectURL: string;
-              CodePreview: string;
+              TokenStored: boolean;
+              RefreshTokenStored: boolean;
+              StoredPreview: string;
               Scopes?: string[];
           };
     CancelGoogleLogin?: () => Promise<boolean> | boolean;
+    SaveClaudeAPIKey?: (apiKey: string) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    ClearClaudeAPIKey?: () =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
 };
 
 declare global {
@@ -70,6 +102,7 @@ export const defaultRuntimeStatus: RuntimeStatus = {
     googleConfigured: false,
     authStatus: 'Google ログイン設定を確認しています。',
     claudeConfigured: false,
+    claudeStatus: 'Claude API キー状態を確認しています。',
     databaseReady: false,
     lastRunAt: null,
 };
@@ -100,6 +133,7 @@ export async function loadRuntimeStatus(): Promise<RuntimeStatus> {
         googleConfigured: raw.GoogleConfigured,
         authStatus: raw.AuthStatus,
         claudeConfigured: raw.ClaudeConfigured,
+        claudeStatus: raw.ClaudeStatus,
         databaseReady: raw.DatabaseReady,
         lastRunAt: raw.LastRunAt ?? null,
     };
@@ -119,7 +153,9 @@ export async function startGoogleLogin(): Promise<GoogleLoginResult> {
         message: raw.Message,
         authorizationURL: raw.AuthorizationURL,
         redirectURL: raw.RedirectURL,
-        codePreview: raw.CodePreview,
+        tokenStored: raw.TokenStored,
+        refreshTokenStored: raw.RefreshTokenStored,
+        storedPreview: raw.StoredPreview,
         scopes: raw.Scopes ?? [],
     };
 }
@@ -135,4 +171,34 @@ export async function cancelGoogleLogin(): Promise<boolean> {
         return false;
     }
     return await result;
+}
+
+export async function saveClaudeAPIKey(apiKey: string): Promise<SecretOperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.SaveClaudeAPIKey?.(apiKey);
+
+    if (!result) {
+        throw new Error('Claude API キー保存 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function clearClaudeAPIKey(): Promise<SecretOperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.ClearClaudeAPIKey?.();
+
+    if (!result) {
+        throw new Error('Claude API キー削除 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
 }

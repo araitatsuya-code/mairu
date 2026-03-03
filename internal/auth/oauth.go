@@ -39,21 +39,27 @@ var defaultScopes = []string{
 // Config は Google OAuth クライアントの設定値を表す。
 type Config struct {
 	ClientID         string
+	ClientSecret     string
 	ListenHost       string
 	CallbackPath     string
 	AuthorizationURL string
+	TokenURL         string
 	Scopes           []string
 	FlowTimeout      time.Duration
+	HTTPClient       *http.Client
 }
 
 // Client は Google OAuth PKCE フローを扱う。
 type Client struct {
 	clientID         string
+	clientSecret     string
 	listenHost       string
 	callbackPath     string
 	authorizationURL string
+	tokenURL         string
 	scopes           []string
 	flowTimeout      time.Duration
+	httpClient       *http.Client
 
 	mu      sync.Mutex
 	running bool
@@ -115,11 +121,14 @@ func NewClient(config Config) *Client {
 
 	return &Client{
 		clientID:         strings.TrimSpace(config.ClientID),
+		clientSecret:     strings.TrimSpace(config.ClientSecret),
 		listenHost:       listenHost,
 		callbackPath:     callbackPath,
 		authorizationURL: authorizationURL,
+		tokenURL:         strings.TrimSpace(config.TokenURL),
 		scopes:           scopes,
 		flowTimeout:      flowTimeout,
+		httpClient:       config.HTTPClient,
 	}
 }
 

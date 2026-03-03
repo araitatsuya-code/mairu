@@ -54,16 +54,25 @@ type RuntimeStatus struct {
 	GoogleConfigured bool
 	AuthStatus       string
 	ClaudeConfigured bool
+	ClaudeStatus     string
 	DatabaseReady    bool
 	LastRunAt        *time.Time
 }
 
 // GoogleLoginResult は Google OAuth ログイン実行結果を表す。
 type GoogleLoginResult struct {
-	Success          bool
-	Message          string
-	AuthorizationURL string
-	RedirectURL      string
-	CodePreview      string
-	Scopes           []string
+	Success            bool
+	Message            string
+	AuthorizationURL   string
+	RedirectURL        string
+	TokenStored        bool
+	RefreshTokenStored bool
+	StoredPreview      string
+	Scopes             []string
+}
+
+// SecretOperationResult は機密情報の保存・削除結果を表す。
+type SecretOperationResult struct {
+	Success bool
+	Message string
 }
