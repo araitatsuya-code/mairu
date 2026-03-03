@@ -148,6 +148,111 @@
     line-height: 1.6;
 }
 
+.settings-action-stack {
+    display: grid;
+    gap: 12px;
+    margin-top: 6px;
+}
+
+.settings-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings-action-button {
+    width: fit-content;
+    padding: 11px 16px;
+    border: 0;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #38bdf8, #14b8a6);
+    color: #082f49;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        transform 160ms ease,
+        box-shadow 160ms ease,
+        opacity 160ms ease;
+    box-shadow: 0 12px 32px rgba(20, 184, 166, 0.22);
+}
+
+.settings-action-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+
+.settings-action-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    box-shadow: none;
+}
+
+.settings-cancel-button {
+    width: fit-content;
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    background: rgba(2, 6, 23, 0.18);
+    color: #e2e8f0;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        transform 160ms ease,
+        opacity 160ms ease,
+        border-color 160ms ease;
+}
+
+.settings-cancel-button:hover {
+    transform: translateY(-1px);
+    border-color: rgba(125, 211, 252, 0.35);
+}
+
+.settings-inline-note,
+.settings-error-note {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.7;
+}
+
+.settings-inline-note {
+    color: #bfdbfe;
+}
+
+.settings-error-note {
+    color: #fca5a5;
+}
+
+.settings-result-grid {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 14px;
+    border-radius: 16px;
+    background: rgba(8, 47, 73, 0.42);
+}
+
+.settings-result-grid div {
+    display: grid;
+    gap: 4px;
+}
+
+.settings-result-grid dt {
+    color: #7dd3fc;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.settings-result-grid dd {
+    margin: 0;
+    color: #e0f2fe;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
 .state-chip {
     padding: 6px 10px;
     border-radius: 999px;

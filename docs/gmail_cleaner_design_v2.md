@@ -159,7 +159,7 @@ await ExecuteActions(selectedActions)
 ### 5.2 Google Cloud Console 設定
 - プロジェクト作成→Gmail APIを有効化。
 - OAuthクライアントIDを「デスクトップアプリ」で作成。
-- Client IDをビルド設定に同梱。
+- Client IDを `MAIRU_GOOGLE_OAUTH_CLIENT_ID` として起動時に読み込む。
 - Client Secretは保持せずPKCEを採用（Google推奨）。
 
 ### 5.3 必要スコープ
@@ -167,7 +167,7 @@ await ExecuteActions(selectedActions)
 | --- | --- |
 | gmail.modify | メールの読み取り・ラベル付け・アーカイブ |
 | gmail.labels | ラベルの作成・管理 |
-| gmail.metadata | メタデータのみの取得（高速化） |
+| openid / email / profile | ログイン結果の本人確認とアカウント表示用 |
 
 ## 6. Claude API 連携
 

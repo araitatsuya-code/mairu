@@ -11,13 +11,28 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 - ✅ `MAIRU-001 / #1` を完了し、Wails の起動・ビルド・テスト導線を整備済み。
 - ✅ `MAIRU-002 / #2` を完了し、`internal/` の Go パッケージ骨組みと共有 DTO を追加済み。
 - ✅ `MAIRU-003 / #3` を完了し、Settings 画面の雛形と起動時初期化の入口を追加済み。
-- ✅ `MAIRU-004 / #4` と `MAIRU-010 / #10` が着手可能。
+- ✅ `MAIRU-004 / #4` を完了し、Google OAuth PKCE の認可コード受信まで確認済み。
+- ✅ `MAIRU-010 / #10` が着手可能。
 
 ## 必要環境（開発開始時）
 - Go 1.22+
 - Node.js 20+（Wails Reactテンプレートが要求するバージョン）
 - Wails CLI（`go install github.com/wailsapp/wails/v2/cmd/wails@latest`）
 - npm（フロントエンド依存管理）
+
+## Google OAuth 設定（MAIRU-004）
+- Google Cloud Console でプロジェクトを作成し、Gmail API を有効化する
+- OAuth クライアント ID は「デスクトップアプリ」で作成する
+- 起動前に `MAIRU_GOOGLE_OAUTH_CLIENT_ID` へ Client ID を設定する
+- 現在のログインフローでは `gmail.modify` `gmail.labels` `openid` `email` `profile` を要求する
+
+毎回 `export` するのが面倒な場合は、リポジトリ直下に `.env.local` を作成してください（`make dev` が自動で読み込みます）。
+
+```bash
+MAIRU_GOOGLE_OAUTH_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"
+```
+
+`.env.local` はローカル専用（gitignore 対象）として扱い、必要なら `chmod 600 .env.local` で権限を絞ってください。
 
 ## 推奨ディレクトリ構成
 ```
@@ -39,8 +54,7 @@ mairu/
 macOS では `UniformTypeIdentifiers` のリンク設定を `Makefile` 側で補っています。
 
 ## 次のアクション
-1. `MAIRU-004 / #4` に進み、Google OAuth PKCE ログインを実装する。
+1. `MAIRU-005 / #5` に進み、OAuth トークンと API キーをキーチェーンへ保存する。
 2. `MAIRU-010 / #10` に進み、SQLite 初期化とスキーマの土台を作る。
-3. `MAIRU-005 / #5` に向けて、キーチェーン連携の前提を整理する。
 
 Codexとの協調作業手順などは [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) を参照してください。

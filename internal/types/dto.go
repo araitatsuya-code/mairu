@@ -51,7 +51,19 @@ type MessageAction struct {
 // RuntimeStatus は設定画面や初期化処理で共有する状態 DTO。
 type RuntimeStatus struct {
 	Authorized       bool
+	GoogleConfigured bool
+	AuthStatus       string
 	ClaudeConfigured bool
 	DatabaseReady    bool
 	LastRunAt        *time.Time
+}
+
+// GoogleLoginResult は Google OAuth ログイン実行結果を表す。
+type GoogleLoginResult struct {
+	Success          bool
+	Message          string
+	AuthorizationURL string
+	RedirectURL      string
+	CodePreview      string
+	Scopes           []string
 }
