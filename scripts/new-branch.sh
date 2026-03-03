@@ -22,8 +22,9 @@ fi
 
 git fetch --all --prune
 
-if git show-ref --verify --quiet "refs/heads/${branch}"; then
-  echo "Error: branch already exists locally: ${branch}" >&2
+if git show-ref --verify --quiet "refs/heads/${branch}" ||
+   git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+  echo "Error: branch already exists: ${branch}" >&2
   exit 1
 fi
 
