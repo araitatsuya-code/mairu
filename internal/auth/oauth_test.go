@@ -85,6 +85,22 @@ func TestClientIsConfigured(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "whitespace id",
+			config: Config{
+				ClientID:     "   ",
+				ClientSecret: "client-secret",
+			},
+			want: false,
+		},
+		{
+			name: "whitespace secret",
+			config: Config{
+				ClientID:     "client-id",
+				ClientSecret: "   ",
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

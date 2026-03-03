@@ -58,6 +58,7 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 	a.mu.RUnlock()
 
 	baseContext := a.baseContext()
+	googleConfigured := a.authClient.IsConfigured()
 
 	authorized, err := a.secretManager.HasGoogleToken(baseContext)
 	if err != nil {
@@ -65,6 +66,8 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		authStatus = buildCredentialErrorMessage("Google 認証状態を確認できません。", err)
 	} else if authorized && shouldUseStoredAuthMessage(authStatus) {
 		authStatus = buildStoredAuthStatusMessage()
+	} else if !authorized && shouldUseUnstoredAuthMessage(authStatus) {
+		authStatus = buildAuthStatusMessage(googleConfigured)
 	}
 
 	claudeConfigured, err := a.secretManager.HasClaudeAPIKey(baseContext)
@@ -73,11 +76,13 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		claudeStatus = buildCredentialErrorMessage("Claude API キー状態を確認できません。", err)
 	} else if claudeConfigured && shouldUseStoredClaudeMessage(claudeStatus) {
 		claudeStatus = buildStoredClaudeStatusMessage()
+	} else if !claudeConfigured && shouldUseUnstoredClaudeMessage(claudeStatus) {
+		claudeStatus = buildUnstoredClaudeStatusMessage()
 	}
 
 	return types.RuntimeStatus{
 		Authorized:       authorized,
-		GoogleConfigured: a.authClient.IsConfigured(),
+		GoogleConfigured: googleConfigured,
 		AuthStatus:       authStatus,
 		ClaudeConfigured: claudeConfigured,
 		ClaudeStatus:     claudeStatus,
@@ -108,6 +113,7 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 	}
 
 	loginContext, cancel := context.WithCancel(a.baseContext())
+	defer cancel()
 	cancelSeq, ok := a.setLoginCancelIfIdle(cancel)
 	if !ok {
 		cancel()
@@ -150,7 +156,7 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 		return types.GoogleLoginResult{}, err
 	}
 
-	message := "Google トークンをキーチェーンに保存しました。次の issue で Gmail 接続確認へ進めます。"
+	message := buildGoogleTokenSavedStatusMessage()
 	a.setAuthStatus(message)
 
 	scopes := tokenSet.Scopes()
@@ -198,7 +204,7 @@ func (a *App) SaveClaudeAPIKey(apiKey string) types.SecretOperationResult {
 		}
 	}
 
-	message := "Claude API キーをキーチェーンに保存しました。"
+	message := buildClaudeAPIKeySavedStatusMessage()
 	a.setClaudeStatus(message)
 	return types.SecretOperationResult{
 		Success: true,
@@ -277,8 +283,20 @@ func buildStoredAuthStatusMessage() string {
 	return "Google トークンをキーチェーンに保存済みです。"
 }
 
+func buildGoogleTokenSavedStatusMessage() string {
+	return "Google トークンをキーチェーンに保存しました。次の issue で Gmail 接続確認へ進めます。"
+}
+
 func buildStoredClaudeStatusMessage() string {
 	return "Claude API キーをキーチェーンに保存済みです。"
+}
+
+func buildClaudeAPIKeySavedStatusMessage() string {
+	return "Claude API キーをキーチェーンに保存しました。"
+}
+
+func buildUnstoredClaudeStatusMessage() string {
+	return "Claude API キーを保存すると、次の分類機能から利用できます。"
 }
 
 func buildCredentialErrorMessage(prefix string, err error) string {
@@ -290,12 +308,30 @@ func shouldUseStoredAuthMessage(message string) bool {
 	trimmed := strings.TrimSpace(message)
 	return trimmed == "" ||
 		trimmed == buildAuthStatusMessage(true) ||
+		trimmed == buildGoogleTokenSavedStatusMessage() ||
+		trimmed == buildStoredAuthStatusMessage()
+}
+
+func shouldUseUnstoredAuthMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return trimmed == "" ||
+		trimmed == buildAuthStatusMessage(true) ||
+		trimmed == buildGoogleTokenSavedStatusMessage() ||
 		trimmed == buildStoredAuthStatusMessage()
 }
 
 func shouldUseStoredClaudeMessage(message string) bool {
 	trimmed := strings.TrimSpace(message)
-	return trimmed == "" || trimmed == buildStoredClaudeStatusMessage()
+	return trimmed == "" ||
+		trimmed == buildClaudeAPIKeySavedStatusMessage() ||
+		trimmed == buildStoredClaudeStatusMessage()
+}
+
+func shouldUseUnstoredClaudeMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return trimmed == "" ||
+		trimmed == buildClaudeAPIKeySavedStatusMessage() ||
+		trimmed == buildStoredClaudeStatusMessage()
 }
 
 func (a *App) baseContext() context.Context {
@@ -330,5 +366,5 @@ func (a *App) initialClaudeStatus() string {
 		return buildStoredClaudeStatusMessage()
 	}
 
-	return "Claude API キーを保存すると、次の分類機能から利用できます。"
+	return buildUnstoredClaudeStatusMessage()
 }

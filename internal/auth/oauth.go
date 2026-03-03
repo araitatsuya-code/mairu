@@ -109,6 +109,11 @@ func NewClient(config Config) *Client {
 		authorizationURL = defaultAuthorizationURL
 	}
 
+	tokenURL := strings.TrimSpace(config.TokenURL)
+	if tokenURL == "" {
+		tokenURL = defaultTokenURL
+	}
+
 	scopes := cloneStrings(config.Scopes)
 	if len(scopes) == 0 {
 		scopes = cloneStrings(defaultScopes)
@@ -119,16 +124,21 @@ func NewClient(config Config) *Client {
 		flowTimeout = defaultLoginFlowTimeout
 	}
 
+	httpClient := config.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
 	return &Client{
 		clientID:         strings.TrimSpace(config.ClientID),
 		clientSecret:     strings.TrimSpace(config.ClientSecret),
 		listenHost:       listenHost,
 		callbackPath:     callbackPath,
 		authorizationURL: authorizationURL,
-		tokenURL:         strings.TrimSpace(config.TokenURL),
+		tokenURL:         tokenURL,
 		scopes:           scopes,
 		flowTimeout:      flowTimeout,
-		httpClient:       config.HTTPClient,
+		httpClient:       httpClient,
 	}
 }
 

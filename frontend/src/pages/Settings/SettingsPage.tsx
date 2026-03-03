@@ -59,7 +59,8 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [claudeApiKey, setClaudeApiKey] = useState('');
     const [claudePending, setClaudePending] = useState(false);
     const [claudeError, setClaudeError] = useState<string | null>(null);
-    const claudeApiKeyBlank = claudeApiKey.trim() === "";
+    const normalizedClaudeApiKey = claudeApiKey.trim();
+    const claudeApiKeyBlank = normalizedClaudeApiKey === '';
     const googleStateLabel = status.authorized
         ? 'トークン保存済み'
         : status.googleConfigured
@@ -131,7 +132,8 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     }
 
     async function handleSaveClaudeAPIKey() {
-        if (claudeApiKeyBlank) {
+        const normalized = normalizedClaudeApiKey;
+        if (normalized === '') {
             setClaudeError('Claude API キーを入力してください。');
             return;
         }
@@ -140,7 +142,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         setClaudeError(null);
 
         try {
-            const result = await saveClaudeAPIKey(claudeApiKey);
+            const result = await saveClaudeAPIKey(normalized);
             if (!result.success) {
                 setClaudeError(result.message);
                 return;
@@ -300,12 +302,14 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                             <p className="settings-item-body">
                                 OS キーチェーン連携を前提に、保存状態の確認と再入力導線を配置します。
                             </p>
-                            <div className="settings-action-stack">
-                                <label className="settings-field" htmlFor="claude-api-key">
-                                    <span className="settings-field-label">Claude API キー</span>
+                            <div className="settings-action-stack mt-1.5 grid gap-3">
+                                <label className="settings-field grid gap-2" htmlFor="claude-api-key">
+                                    <span className="settings-field-label text-sm font-bold text-slate-300">
+                                        Claude API キー
+                                    </span>
                                     <input
                                         id="claude-api-key"
-                                        className="settings-input"
+                                        className="settings-input w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200"
                                         type="password"
                                         autoComplete="off"
                                         value={claudeApiKey}
@@ -315,9 +319,9 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                         placeholder="sk-ant-api03-..."
                                     />
                                 </label>
-                                <div className="settings-action-row">
+                                <div className="settings-action-row flex flex-wrap items-center gap-3">
                                     <button
-                                        className="settings-action-button"
+                                        className="settings-action-button inline-flex items-center justify-center rounded-[14px] px-4 py-2.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"
                                         type="button"
                                         onClick={() => {
                                             void handleSaveClaudeAPIKey();
@@ -328,7 +332,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                     </button>
                                     {status.claudeConfigured ? (
                                         <button
-                                            className="settings-cancel-button"
+                                            className="settings-cancel-button inline-flex items-center justify-center rounded-[14px] px-3.5 py-2.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"
                                             type="button"
                                             onClick={() => {
                                                 void handleClearClaudeAPIKey();
@@ -339,8 +343,14 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                         </button>
                                     ) : null}
                                 </div>
-                                <p className="settings-inline-note">{status.claudeStatus}</p>
-                                {claudeError ? <p className="settings-error-note">{claudeError}</p> : null}
+                                <p className="settings-inline-note text-sm leading-7 text-sky-100">
+                                    {status.claudeStatus}
+                                </p>
+                                {claudeError ? (
+                                    <p className="settings-error-note text-sm leading-7 text-rose-300">
+                                        {claudeError}
+                                    </p>
+                                ) : null}
                             </div>
                         </li>
                         <li className="settings-item">
