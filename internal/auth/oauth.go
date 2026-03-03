@@ -39,21 +39,27 @@ var defaultScopes = []string{
 // Config は Google OAuth クライアントの設定値を表す。
 type Config struct {
 	ClientID         string
+	ClientSecret     string
 	ListenHost       string
 	CallbackPath     string
 	AuthorizationURL string
+	TokenURL         string
 	Scopes           []string
 	FlowTimeout      time.Duration
+	HTTPClient       *http.Client
 }
 
 // Client は Google OAuth PKCE フローを扱う。
 type Client struct {
 	clientID         string
+	clientSecret     string
 	listenHost       string
 	callbackPath     string
 	authorizationURL string
+	tokenURL         string
 	scopes           []string
 	flowTimeout      time.Duration
+	httpClient       *http.Client
 
 	mu      sync.Mutex
 	running bool
@@ -103,6 +109,11 @@ func NewClient(config Config) *Client {
 		authorizationURL = defaultAuthorizationURL
 	}
 
+	tokenURL := strings.TrimSpace(config.TokenURL)
+	if tokenURL == "" {
+		tokenURL = defaultTokenURL
+	}
+
 	scopes := cloneStrings(config.Scopes)
 	if len(scopes) == 0 {
 		scopes = cloneStrings(defaultScopes)
@@ -113,19 +124,28 @@ func NewClient(config Config) *Client {
 		flowTimeout = defaultLoginFlowTimeout
 	}
 
+	httpClient := config.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
 	return &Client{
 		clientID:         strings.TrimSpace(config.ClientID),
+		clientSecret:     strings.TrimSpace(config.ClientSecret),
 		listenHost:       listenHost,
 		callbackPath:     callbackPath,
 		authorizationURL: authorizationURL,
+		tokenURL:         tokenURL,
 		scopes:           scopes,
 		flowTimeout:      flowTimeout,
+		httpClient:       httpClient,
 	}
 }
 
 // IsConfigured はログイン開始に必要な必須設定がそろっているか返す。
 func (c *Client) IsConfigured() bool {
-	return strings.TrimSpace(c.clientID) != ""
+	return strings.TrimSpace(c.clientID) != "" &&
+		strings.TrimSpace(c.clientSecret) != ""
 }
 
 // Scopes は現在の OAuth スコープ定義を返す。
@@ -136,7 +156,7 @@ func (c *Client) Scopes() []string {
 // RunLoginFlow はブラウザを開き、認可コード受信まで待機する。
 func (c *Client) RunLoginFlow(ctx context.Context) (LoginResult, error) {
 	if !c.IsConfigured() {
-		return LoginResult{}, errors.New("Google OAuth クライアント ID が未設定です")
+		return LoginResult{}, errors.New("Google OAuth クライアント ID または Client Secret が未設定です")
 	}
 
 	if err := c.begin(); err != nil {

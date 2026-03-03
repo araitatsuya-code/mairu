@@ -3,7 +3,9 @@ import './SettingsPage.css';
 import { useState } from 'react';
 
 import {
+    clearClaudeAPIKey,
     cancelGoogleLogin,
+    saveClaudeAPIKey,
     startGoogleLogin,
     type GoogleLoginResult,
     type RuntimeStatus,
@@ -54,8 +56,13 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [loginError, setLoginError] = useState<string | null>(null);
     const [lastLoginResult, setLastLoginResult] = useState<GoogleLoginResult | null>(null);
     const [loginNote, setLoginNote] = useState<string | null>(null);
+    const [claudeApiKey, setClaudeApiKey] = useState('');
+    const [claudePending, setClaudePending] = useState(false);
+    const [claudeError, setClaudeError] = useState<string | null>(null);
+    const normalizedClaudeApiKey = claudeApiKey.trim();
+    const claudeApiKeyBlank = normalizedClaudeApiKey === '';
     const googleStateLabel = status.authorized
-        ? '認可コード取得済み'
+        ? 'トークン保存済み'
         : status.googleConfigured
           ? 'ログイン可能'
           : 'Client ID待ち';
@@ -124,10 +131,63 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         }
     }
 
+    async function handleSaveClaudeAPIKey() {
+        const normalized = normalizedClaudeApiKey;
+        if (normalized === '') {
+            setClaudeError('Claude API キーを入力してください。');
+            return;
+        }
+
+        setClaudePending(true);
+        setClaudeError(null);
+
+        try {
+            const result = await saveClaudeAPIKey(normalized);
+            if (!result.success) {
+                setClaudeError(result.message);
+                return;
+            }
+
+            setClaudeApiKey('');
+            await onStatusRefresh();
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'Claude API キーの保存に失敗しました。';
+            setClaudeError(message);
+        } finally {
+            setClaudePending(false);
+        }
+    }
+
+    async function handleClearClaudeAPIKey() {
+        setClaudePending(true);
+        setClaudeError(null);
+
+        try {
+            const result = await clearClaudeAPIKey();
+            if (!result.success) {
+                setClaudeError(result.message);
+                return;
+            }
+
+            await onStatusRefresh();
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'Claude API キーの削除に失敗しました。';
+            setClaudeError(message);
+        } finally {
+            setClaudePending(false);
+        }
+    }
+
     return (
         <div className="settings-page">
             <section className="settings-hero">
-                <p className="settings-eyebrow">MAIRU-004 / #4</p>
+                <p className="settings-eyebrow">MAIRU-005 / #5</p>
                 <h1>{appName} 設定ハブ</h1>
                 <p className="settings-lead">
                     起動直後に必要な初期状態をここで確認し、OAuth、Claude API キー、
@@ -138,7 +198,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
             <section className="settings-status-grid" aria-label="初期状態サマリー">
                 <StatusCard
                     label="Google 認証"
-                    readyLabel="認可コード取得済み"
+                    readyLabel="トークン保存済み"
                     pendingLabel="未接続"
                     ready={status.authorized}
                 />
@@ -173,7 +233,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                             </div>
                             <p className="settings-item-body">
                                 Google OAuth の PKCE フローを使い、ブラウザ起動から localhost
-                                リダイレクト受信までをこの場で完結させます。
+                                リダイレクト受信、トークン交換、OS キーチェーン保存までをこの場で完結させます。
                             </p>
                             <div className="settings-action-stack">
                                 <div className="settings-action-row">
@@ -207,8 +267,16 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                             <dd>{lastLoginResult.message}</dd>
                                         </div>
                                         <div>
-                                            <dt>認可コード</dt>
-                                            <dd>{lastLoginResult.codePreview || '受信済み'}</dd>
+                                            <dt>保存状態</dt>
+                                            <dd>{lastLoginResult.tokenStored ? 'キーチェーン保存済み' : '未保存'}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>再利用用トークン</dt>
+                                            <dd>
+                                                {lastLoginResult.refreshTokenStored
+                                                    ? lastLoginResult.storedPreview || '発行済み'
+                                                    : '未取得'}
+                                            </dd>
                                         </div>
                                         <div>
                                             <dt>リダイレクト</dt>
@@ -234,6 +302,56 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                             <p className="settings-item-body">
                                 OS キーチェーン連携を前提に、保存状態の確認と再入力導線を配置します。
                             </p>
+                            <div className="settings-action-stack mt-1.5 grid gap-3">
+                                <label className="settings-field grid gap-2" htmlFor="claude-api-key">
+                                    <span className="settings-field-label text-sm font-bold text-slate-300">
+                                        Claude API キー
+                                    </span>
+                                    <input
+                                        id="claude-api-key"
+                                        className="settings-input w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200"
+                                        type="password"
+                                        autoComplete="off"
+                                        value={claudeApiKey}
+                                        onChange={(event) => {
+                                            setClaudeApiKey(event.target.value);
+                                        }}
+                                        placeholder="sk-ant-api03-..."
+                                    />
+                                </label>
+                                <div className="settings-action-row flex flex-wrap items-center gap-3">
+                                    <button
+                                        className="settings-action-button inline-flex items-center justify-center rounded-[14px] px-4 py-2.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleSaveClaudeAPIKey();
+                                        }}
+                                        disabled={claudePending || claudeApiKeyBlank}
+                                    >
+                                        {claudePending ? '保存中...' : 'キーチェーンへ保存'}
+                                    </button>
+                                    {status.claudeConfigured ? (
+                                        <button
+                                            className="settings-cancel-button inline-flex items-center justify-center rounded-[14px] px-3.5 py-2.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="button"
+                                            onClick={() => {
+                                                void handleClearClaudeAPIKey();
+                                            }}
+                                            disabled={claudePending}
+                                        >
+                                            保存済みキーを削除
+                                        </button>
+                                    ) : null}
+                                </div>
+                                <p className="settings-inline-note text-sm leading-7 text-sky-100">
+                                    {status.claudeStatus}
+                                </p>
+                                {claudeError ? (
+                                    <p className="settings-error-note text-sm leading-7 text-rose-300">
+                                        {claudeError}
+                                    </p>
+                                ) : null}
+                            </div>
                         </li>
                         <li className="settings-item">
                             <div className="settings-item-header">
