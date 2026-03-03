@@ -182,6 +182,14 @@
     transform: translateY(-1px);
 }
 
+.settings-action-button:focus-visible:not(:disabled) {
+    outline: 2px solid #e0f2fe;
+    outline-offset: 3px;
+    box-shadow:
+        0 0 0 4px rgba(14, 165, 233, 0.22),
+        0 12px 32px rgba(20, 184, 166, 0.22);
+}
+
 .settings-action-button:disabled {
     cursor: not-allowed;
     opacity: 0.55;
@@ -207,6 +215,13 @@
 .settings-cancel-button:hover {
     transform: translateY(-1px);
     border-color: rgba(125, 211, 252, 0.35);
+}
+
+.settings-cancel-button:focus-visible {
+    outline: 2px solid #e0f2fe;
+    outline-offset: 3px;
+    border-color: rgba(125, 211, 252, 0.45);
+    box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.16);
 }
 
 .settings-inline-note,

@@ -60,6 +60,20 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
           ? 'ログイン可能'
           : 'Client ID待ち';
 
+    async function refreshStatusSafely(fallbackMessage: string): Promise<boolean> {
+        try {
+            await onStatusRefresh();
+            return true;
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : fallbackMessage;
+            setLoginError(message);
+            return false;
+        }
+    }
+
     async function handleGoogleLogin() {
         setLoginPending(true);
         setLoginError(null);
@@ -69,7 +83,6 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         try {
             const result = await startGoogleLogin();
             setLastLoginResult(result);
-            await onStatusRefresh();
         } catch (cause) {
             const message =
                 cause instanceof Error
@@ -80,8 +93,8 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
             } else {
                 setLoginError(message);
             }
-            await onStatusRefresh();
         } finally {
+            await refreshStatusSafely('状態の再取得に失敗しました。');
             setLoginPending(false);
         }
     }
@@ -89,18 +102,32 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     async function handleCancelLogin() {
         setLoginNote('中断しています...');
         setLoginError(null);
-        const cancelled = await cancelGoogleLogin();
-        if (!cancelled) {
-            setLoginNote('中断対象のログインが見つかりませんでした。');
-            return;
+
+        try {
+            const cancelled = await cancelGoogleLogin();
+            if (!cancelled) {
+                setLoginNote('中断対象のログインが見つかりませんでした。');
+                return;
+            }
+
+            const refreshed = await refreshStatusSafely('状態の再取得に失敗しました。');
+            if (refreshed) {
+                setLoginNote(null);
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'ログイン中断に失敗しました。';
+            setLoginError(message);
+            setLoginNote(null);
         }
-        await onStatusRefresh();
     }
 
     return (
         <div className="settings-page">
             <section className="settings-hero">
-                <p className="settings-eyebrow">MAIRU-003 / #3</p>
+                <p className="settings-eyebrow">MAIRU-004 / #4</p>
                 <h1>{appName} 設定ハブ</h1>
                 <p className="settings-lead">
                     起動直後に必要な初期状態をここで確認し、OAuth、Claude API キー、

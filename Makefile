@@ -25,15 +25,15 @@ frontend-test:
 	cd frontend && $(NPM) run test
 
 dev: check-wails
-	@set -a; [ -f "$(ENV_FILE)" ] && . "./$(ENV_FILE)"; set +a; \
+	@set -a; [ -f "$(ENV_FILE)" ] && . "$(ENV_FILE)"; set +a; \
 		GOCACHE=$(GOCACHE_DIR) $(WAILS) dev -compiler $(WAILS_COMPILER)
 
 build: frontend-build
 	mkdir -p build/bin
-	@set -a; [ -f "$(ENV_FILE)" ] && . "./$(ENV_FILE)"; set +a; \
+	@set -a; [ -f "$(ENV_FILE)" ] && . "$(ENV_FILE)"; set +a; \
 		CGO_LDFLAGS='$(WAILS_CGO_LDFLAGS)' GOCACHE=$(GOCACHE_DIR) go build -buildvcs=false -tags desktop,wv2runtime.download,production -ldflags "-w -s" -o build/bin/mairu
 
 test:
-	@set -a; [ -f "$(ENV_FILE)" ] && . "./$(ENV_FILE)"; set +a; \
+	@set -a; [ -f "$(ENV_FILE)" ] && . "$(ENV_FILE)"; set +a; \
 		GOCACHE=$(GOCACHE_DIR) go test ./...
 	$(MAKE) frontend-test
