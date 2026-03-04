@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"mairu/internal/auth"
+	"mairu/internal/claude"
 	"mairu/internal/gmail"
+	"mairu/internal/types"
 )
 
 func TestGetRuntimeStatusIncludesStoredSecretPreviews(t *testing.T) {
@@ -173,6 +175,76 @@ func TestGetRuntimeStatusClearsGmailSuccessWhenUnauthorized(t *testing.T) {
 	}
 	if status.GmailAccountEmail != "" {
 		t.Fatalf("GmailAccountEmail = %q, want empty", status.GmailAccountEmail)
+	}
+}
+
+func TestClassifyEmailsUsesStoredClaudeAPIKey(t *testing.T) {
+	t.Parallel()
+
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveClaudeAPIKey(context.Background(), "claude-secret"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() != "https://claude.test/v1/messages" {
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+			}
+			if got := r.Header.Get("x-api-key"); got != "claude-secret" {
+				t.Fatalf("x-api-key mismatch: got %q", got)
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{
+					"content":[
+						{
+							"type":"text",
+							"text":"[{\"id\":\"msg-1\",\"category\":\"important\",\"confidence\":0.92,\"reason\":\"返信が必要です\"}]"
+						}
+					]
+				}`)),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		claudeClient: claude.NewClient(claude.Options{
+			BaseURL:      "https://claude.test",
+			DefaultModel: "claude-test-model",
+			HTTPClient:   httpClient,
+		}),
+		secretManager: manager,
+	}
+
+	result, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{
+				ID:      "msg-1",
+				From:    "boss@example.com",
+				Subject: "至急",
+				Snippet: "確認してください",
+				Unread:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEmails returned error: %v", err)
+	}
+
+	if result.Model != "claude-test-model" {
+		t.Fatalf("Model = %q, want %q", result.Model, "claude-test-model")
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].ReviewLevel != types.ClassificationReviewLevelAutoApply {
+		t.Fatalf("ReviewLevel = %q, want %q", result.Results[0].ReviewLevel, types.ClassificationReviewLevelAutoApply)
 	}
 }
 

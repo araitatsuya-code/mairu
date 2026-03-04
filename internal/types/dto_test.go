@@ -28,6 +28,59 @@ func TestClassificationCategoryValues(t *testing.T) {
 	}
 }
 
+func TestClassificationCategoryIsValid(t *testing.T) {
+	t.Parallel()
+
+	if !ClassificationCategoryImportant.IsValid() {
+		t.Fatalf("ClassificationCategoryImportant.IsValid() = false, want true")
+	}
+
+	if ClassificationCategory("unknown").IsValid() {
+		t.Fatalf("ClassificationCategory(\"unknown\").IsValid() = true, want false")
+	}
+}
+
+func TestReviewLevelForConfidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		confidence float64
+		want       ClassificationReviewLevel
+	}{
+		{
+			name:       "auto apply",
+			confidence: 0.90,
+			want:       ClassificationReviewLevelAutoApply,
+		},
+		{
+			name:       "review",
+			confidence: 0.70,
+			want:       ClassificationReviewLevelReview,
+		},
+		{
+			name:       "review with reason",
+			confidence: 0.50,
+			want:       ClassificationReviewLevelReviewWithReason,
+		},
+		{
+			name:       "hold",
+			confidence: 0.49,
+			want:       ClassificationReviewLevelHold,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ReviewLevelForConfidence(tt.confidence); got != tt.want {
+				t.Fatalf("ReviewLevelForConfidence(%0.2f) = %q, want %q", tt.confidence, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestActionKindValues(t *testing.T) {
 	t.Parallel()
 
