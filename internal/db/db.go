@@ -229,6 +229,9 @@ func (s *Store) configure(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&journalMode); err != nil {
 		return fmt.Errorf("WAL モードを設定できませんでした: %w", err)
 	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("WAL モードを有効化できませんでした: got %q", journalMode)
+	}
 
 	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
 		return fmt.Errorf("foreign_keys を設定できませんでした: %w", err)

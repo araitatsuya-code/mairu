@@ -2,8 +2,6 @@ module mairu
 
 go 1.24.0
 
-toolchain go1.24.2
-
 require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/wailsapp/wails/v2 v2.11.0
