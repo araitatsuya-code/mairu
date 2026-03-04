@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -10,18 +11,23 @@ import (
 
 	"mairu/internal/auth"
 	"mairu/internal/db"
+	"mairu/internal/gmail"
 	"mairu/internal/types"
 )
 
 type App struct {
 	ctx           context.Context
 	authClient    *auth.Client
+	gmailClient   *gmail.Client
 	secretManager *auth.SecretManager
 	dbStore       *db.Store
 
 	mu             sync.RWMutex
 	authStatus     string
+	gmailStatus    string
 	claudeStatus   string
+	gmailConnected bool
+	gmailAccount   string
 	databaseReady  bool
 	loginCancel    context.CancelFunc
 	loginCancelSeq uint64
@@ -37,9 +43,11 @@ func NewApp() *App {
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
 		}),
+		gmailClient:   gmail.NewClient(gmail.Options{}),
 		secretManager: secretManager,
 	}
 	app.authStatus = app.initialAuthStatus()
+	app.gmailStatus = app.initialGmailStatus()
 	app.claudeStatus = app.initialClaudeStatus()
 
 	return app
@@ -67,41 +75,79 @@ func (a *App) AppName() string {
 func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 	a.mu.RLock()
 	authStatus := a.authStatus
+	gmailStatus := a.gmailStatus
 	claudeStatus := a.claudeStatus
+	gmailConnected := a.gmailConnected
+	gmailAccount := a.gmailAccount
 	databaseReady := a.databaseReady
 	a.mu.RUnlock()
 
 	baseContext := a.baseContext()
 	googleConfigured := a.authClient.IsConfigured()
+	googleTokenPreview := ""
+	claudeKeyPreview := ""
 
 	authorized, err := a.secretManager.HasGoogleToken(baseContext)
 	if err != nil {
 		authorized = false
 		authStatus = buildCredentialErrorMessage("Google 認証状態を確認できません。", err)
-	} else if authorized && shouldUseStoredAuthMessage(authStatus) {
-		authStatus = buildStoredAuthStatusMessage()
+	} else if authorized {
+		tokenSet, loadErr := a.secretManager.LoadGoogleToken(baseContext)
+		if loadErr != nil {
+			authorized = false
+			authStatus = buildCredentialErrorMessage("Google 認証状態を確認できません。", loadErr)
+		} else {
+			googleTokenPreview = maskedGoogleTokenPreview(tokenSet)
+			if shouldUseStoredAuthMessage(authStatus) {
+				authStatus = buildStoredAuthStatusMessage()
+			}
+		}
 	} else if !authorized && shouldUseUnstoredAuthMessage(authStatus) {
 		authStatus = buildAuthStatusMessage(googleConfigured)
+	}
+
+	if !authorized {
+		gmailConnected = false
+		gmailAccount = ""
+		if shouldUseBlockedGmailMessage(gmailStatus) {
+			gmailStatus = buildBlockedGmailStatusMessage()
+		}
+	} else if !gmailConnected && shouldUseReadyGmailMessage(gmailStatus) {
+		gmailStatus = buildReadyGmailStatusMessage()
 	}
 
 	claudeConfigured, err := a.secretManager.HasClaudeAPIKey(baseContext)
 	if err != nil {
 		claudeConfigured = false
 		claudeStatus = buildCredentialErrorMessage("Claude API キー状態を確認できません。", err)
-	} else if claudeConfigured && shouldUseStoredClaudeMessage(claudeStatus) {
-		claudeStatus = buildStoredClaudeStatusMessage()
+	} else if claudeConfigured {
+		apiKey, loadErr := a.secretManager.LoadClaudeAPIKey(baseContext)
+		if loadErr != nil {
+			claudeConfigured = false
+			claudeStatus = buildCredentialErrorMessage("Claude API キー状態を確認できません。", loadErr)
+		} else {
+			claudeKeyPreview = auth.MaskSecret(apiKey)
+			if shouldUseStoredClaudeMessage(claudeStatus) {
+				claudeStatus = buildStoredClaudeStatusMessage()
+			}
+		}
 	} else if !claudeConfigured && shouldUseUnstoredClaudeMessage(claudeStatus) {
 		claudeStatus = buildUnstoredClaudeStatusMessage()
 	}
 
 	return types.RuntimeStatus{
-		Authorized:       authorized,
-		GoogleConfigured: googleConfigured,
-		AuthStatus:       authStatus,
-		ClaudeConfigured: claudeConfigured,
-		ClaudeStatus:     claudeStatus,
-		DatabaseReady:    databaseReady,
-		LastRunAt:        nil,
+		Authorized:         authorized,
+		GoogleConfigured:   googleConfigured,
+		AuthStatus:         authStatus,
+		GoogleTokenPreview: googleTokenPreview,
+		GmailConnected:     gmailConnected,
+		GmailStatus:        gmailStatus,
+		GmailAccountEmail:  gmailAccount,
+		ClaudeConfigured:   claudeConfigured,
+		ClaudeStatus:       claudeStatus,
+		ClaudeKeyPreview:   claudeKeyPreview,
+		DatabaseReady:      databaseReady,
+		LastRunAt:          nil,
 	}
 }
 
@@ -172,6 +218,7 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 
 	message := buildGoogleTokenSavedStatusMessage()
 	a.setAuthStatus(message)
+	a.setGmailConnectionState(false, buildReadyGmailStatusMessage(), "")
 
 	scopes := tokenSet.Scopes()
 	if len(scopes) == 0 {
@@ -188,6 +235,65 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 		StoredPreview:      auth.MaskSecret(tokenSet.RefreshToken),
 		Scopes:             scopes,
 	}, nil
+}
+
+// CheckGmailConnection は保存済みトークンで Gmail API への接続確認を行う。
+func (a *App) CheckGmailConnection() types.GmailConnectionResult {
+	baseContext := a.baseContext()
+
+	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	if err != nil {
+		message := buildCredentialErrorMessage("保存済み Google トークンを読み出せませんでした。", err)
+		a.setGmailConnectionState(false, message, "")
+		return types.GmailConnectionResult{
+			Success: false,
+			Message: message,
+		}
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
+	if err != nil {
+		message := buildCredentialErrorMessage("Google トークンを再利用できませんでした。", err)
+		a.setGmailConnectionState(false, message, "")
+		return types.GmailConnectionResult{
+			Success: false,
+			Message: message,
+		}
+	}
+
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
+			message := buildCredentialErrorMessage("更新した Google トークンをキーチェーンへ保存できませんでした。", err)
+			a.setGmailConnectionState(false, message, "")
+			return types.GmailConnectionResult{
+				Success: false,
+				Message: message,
+			}
+		}
+	}
+
+	profile, err := a.gmailClient.CheckConnection(baseContext, token.AccessToken)
+	if err != nil {
+		message := buildCredentialErrorMessage("Gmail API へ接続できませんでした。", err)
+		a.setGmailConnectionState(false, message, "")
+		return types.GmailConnectionResult{
+			Success: false,
+			Message: message,
+		}
+	}
+
+	message := buildGmailConnectedStatusMessage(profile.EmailAddress)
+	a.setGmailConnectionState(true, message, profile.EmailAddress)
+
+	return types.GmailConnectionResult{
+		Success:        true,
+		Message:        message,
+		EmailAddress:   profile.EmailAddress,
+		MessagesTotal:  profile.MessagesTotal,
+		ThreadsTotal:   profile.ThreadsTotal,
+		HistoryID:      profile.HistoryID,
+		TokenRefreshed: refreshed,
+	}
 }
 
 // CancelGoogleLogin は進行中の Google ログインを中断する。
@@ -257,6 +363,14 @@ func (a *App) setClaudeStatus(status string) {
 	a.mu.Unlock()
 }
 
+func (a *App) setGmailConnectionState(connected bool, status string, account string) {
+	a.mu.Lock()
+	a.gmailConnected = connected
+	a.gmailStatus = status
+	a.gmailAccount = account
+	a.mu.Unlock()
+}
+
 func (a *App) setDatabaseState(store *db.Store, ready bool) {
 	a.mu.Lock()
 	a.dbStore = store
@@ -305,7 +419,24 @@ func buildStoredAuthStatusMessage() string {
 }
 
 func buildGoogleTokenSavedStatusMessage() string {
-	return "Google トークンをキーチェーンに保存しました。次の issue で Gmail 接続確認へ進めます。"
+	return "Google トークンをキーチェーンに保存しました。続けて Gmail 接続確認を実行できます。"
+}
+
+func buildReadyGmailStatusMessage() string {
+	return "保存済み Google トークンで Gmail 接続確認を実行できます。"
+}
+
+func buildBlockedGmailStatusMessage() string {
+	return "Google ログイン後に Gmail 接続確認を実行できます。"
+}
+
+func buildGmailConnectedStatusMessage(emailAddress string) string {
+	trimmed := strings.TrimSpace(emailAddress)
+	if trimmed == "" {
+		return "Gmail API への接続確認に成功しました。"
+	}
+
+	return fmt.Sprintf("Gmail API への接続確認に成功しました。接続先: %s", trimmed)
 }
 
 func buildStoredClaudeStatusMessage() string {
@@ -353,6 +484,27 @@ func shouldUseUnstoredClaudeMessage(message string) bool {
 	return trimmed == "" ||
 		trimmed == buildClaudeAPIKeySavedStatusMessage() ||
 		trimmed == buildStoredClaudeStatusMessage()
+}
+
+func shouldUseReadyGmailMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return trimmed == "" ||
+		trimmed == buildReadyGmailStatusMessage() ||
+		trimmed == buildBlockedGmailStatusMessage()
+}
+
+func shouldUseBlockedGmailMessage(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return trimmed == "" ||
+		trimmed == buildReadyGmailStatusMessage() ||
+		trimmed == buildBlockedGmailStatusMessage()
+}
+
+func maskedGoogleTokenPreview(token auth.TokenSet) string {
+	if preview := auth.MaskSecret(token.RefreshToken); preview != "" {
+		return preview
+	}
+	return auth.MaskSecret(token.AccessToken)
 }
 
 func (a *App) baseContext() context.Context {
@@ -419,4 +571,16 @@ func (a *App) initialClaudeStatus() string {
 	}
 
 	return buildUnstoredClaudeStatusMessage()
+}
+
+func (a *App) initialGmailStatus() string {
+	stored, err := a.secretManager.HasGoogleToken(context.Background())
+	if err != nil {
+		return buildCredentialErrorMessage("Gmail 接続確認の準備状態を確認できません。", err)
+	}
+	if stored {
+		return buildReadyGmailStatusMessage()
+	}
+
+	return buildBlockedGmailStatusMessage()
 }

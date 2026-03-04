@@ -3,10 +3,12 @@ import './SettingsPage.css';
 import { useState } from 'react';
 
 import {
+    checkGmailConnection,
     clearClaudeAPIKey,
     cancelGoogleLogin,
     saveClaudeAPIKey,
     startGoogleLogin,
+    type GmailConnectionResult,
     type GoogleLoginResult,
     type RuntimeStatus,
 } from '../../lib/runtime';
@@ -56,6 +58,9 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [loginError, setLoginError] = useState<string | null>(null);
     const [lastLoginResult, setLastLoginResult] = useState<GoogleLoginResult | null>(null);
     const [loginNote, setLoginNote] = useState<string | null>(null);
+    const [gmailPending, setGmailPending] = useState(false);
+    const [gmailError, setGmailError] = useState<string | null>(null);
+    const [lastGmailResult, setLastGmailResult] = useState<GmailConnectionResult | null>(null);
     const [claudeApiKey, setClaudeApiKey] = useState('');
     const [claudePending, setClaudePending] = useState(false);
     const [claudeError, setClaudeError] = useState<string | null>(null);
@@ -66,6 +71,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         : status.googleConfigured
           ? 'ログイン可能'
           : 'Client ID待ち';
+    const gmailStateLabel = status.gmailConnected
+        ? '接続済み'
+        : status.authorized
+          ? '確認待ち'
+          : 'ログイン待ち';
 
     async function refreshStatusSafely(fallbackMessage: string): Promise<boolean> {
         try {
@@ -184,10 +194,34 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         }
     }
 
+    async function handleCheckGmailConnection() {
+        setGmailPending(true);
+        setGmailError(null);
+
+        try {
+            const result = await checkGmailConnection();
+            setLastGmailResult(result);
+            await onStatusRefresh();
+
+            if (!result.success) {
+                setGmailError(result.message);
+                return;
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'Gmail 接続確認に失敗しました。';
+            setGmailError(message);
+        } finally {
+            setGmailPending(false);
+        }
+    }
+
     return (
         <div className="settings-page">
             <section className="settings-hero">
-                <p className="settings-eyebrow">MAIRU-005 / #5</p>
+                <p className="settings-eyebrow">MAIRU-006 / #6</p>
                 <h1>{appName} 設定ハブ</h1>
                 <p className="settings-lead">
                     起動直後に必要な初期状態をここで確認し、OAuth、Claude API キー、
@@ -260,6 +294,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                     ) : null}
                                 </div>
                                 <p className="settings-inline-note">{status.authStatus}</p>
+                                {status.authorized && status.googleTokenPreview ? (
+                                    <p className="settings-inline-note">
+                                        再利用用トークンプレビュー: {status.googleTokenPreview}
+                                    </p>
+                                ) : null}
                                 {lastLoginResult ? (
                                     <dl className="settings-result-grid">
                                         <div>
@@ -290,6 +329,59 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 ) : null}
                                 {loginNote ? <p className="settings-inline-note">{loginNote}</p> : null}
                                 {loginError ? <p className="settings-error-note">{loginError}</p> : null}
+                            </div>
+                        </li>
+                        <li className="settings-item">
+                            <div className="settings-item-header">
+                                <h3 className="settings-item-title">Gmail API 接続確認</h3>
+                                <span className={`state-chip ${status.gmailConnected ? 'ready' : 'pending'}`}>
+                                    {gmailStateLabel}
+                                </span>
+                            </div>
+                            <p className="settings-item-body">
+                                保存済みトークンを再利用し、必要なら更新したうえで Gmail プロフィール取得により
+                                接続確認を行います。
+                            </p>
+                            <div className="settings-action-stack">
+                                <div className="settings-action-row">
+                                    <button
+                                        className="settings-action-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleCheckGmailConnection();
+                                        }}
+                                        disabled={gmailPending || !status.authorized}
+                                    >
+                                        {gmailPending ? '接続確認中...' : 'Gmail 接続確認'}
+                                    </button>
+                                </div>
+                                <p className="settings-inline-note">{status.gmailStatus}</p>
+                                {status.gmailConnected && status.gmailAccountEmail ? (
+                                    <p className="settings-inline-note">
+                                        接続済みアカウント: {status.gmailAccountEmail}
+                                    </p>
+                                ) : null}
+                                {lastGmailResult?.success ? (
+                                    <dl className="settings-result-grid">
+                                        <div>
+                                            <dt>アカウント</dt>
+                                            <dd>{lastGmailResult.emailAddress}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>メール総数</dt>
+                                            <dd>{lastGmailResult.messagesTotal.toLocaleString('ja-JP')}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>スレッド総数</dt>
+                                            <dd>{lastGmailResult.threadsTotal.toLocaleString('ja-JP')}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>トークン更新</dt>
+                                            <dd>{lastGmailResult.tokenRefreshed ? '実施' : '未実施'}</dd>
+                                        </div>
+                                    </dl>
+                                ) : null}
+                                {gmailError ? <p className="settings-error-note">{gmailError}</p> : null}
                             </div>
                         </li>
                         <li className="settings-item">
@@ -346,6 +438,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 <p className="settings-inline-note text-sm leading-7 text-sky-100">
                                     {status.claudeStatus}
                                 </p>
+                                {status.claudeConfigured && status.claudeKeyPreview ? (
+                                    <p className="settings-inline-note text-sm leading-7 text-sky-100">
+                                        保存済みキープレビュー: {status.claudeKeyPreview}
+                                    </p>
+                                ) : null}
                                 {claudeError ? (
                                     <p className="settings-error-note text-sm leading-7 text-rose-300">
                                         {claudeError}

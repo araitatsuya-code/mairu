@@ -50,13 +50,18 @@ type MessageAction struct {
 
 // RuntimeStatus は設定画面や初期化処理で共有する状態 DTO。
 type RuntimeStatus struct {
-	Authorized       bool
-	GoogleConfigured bool
-	AuthStatus       string
-	ClaudeConfigured bool
-	ClaudeStatus     string
-	DatabaseReady    bool
-	LastRunAt        *time.Time
+	Authorized         bool
+	GoogleConfigured   bool
+	AuthStatus         string
+	GoogleTokenPreview string
+	GmailConnected     bool
+	GmailStatus        string
+	GmailAccountEmail  string
+	ClaudeConfigured   bool
+	ClaudeStatus       string
+	ClaudeKeyPreview   string
+	DatabaseReady      bool
+	LastRunAt          *time.Time
 }
 
 // GoogleLoginResult は Google OAuth ログイン実行結果を表す。
@@ -75,4 +80,15 @@ type GoogleLoginResult struct {
 type SecretOperationResult struct {
 	Success bool
 	Message string
+}
+
+// GmailConnectionResult は Gmail API の接続確認結果を表す。
+type GmailConnectionResult struct {
+	Success        bool
+	Message        string
+	EmailAddress   string
+	MessagesTotal  int64
+	ThreadsTotal   int64
+	HistoryID      string
+	TokenRefreshed bool
 }
