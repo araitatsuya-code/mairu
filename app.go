@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"mairu/internal/auth"
+	"mairu/internal/db"
 	"mairu/internal/types"
 )
 
@@ -16,10 +17,12 @@ type App struct {
 	ctx           context.Context
 	authClient    *auth.Client
 	secretManager *auth.SecretManager
+	dbStore       *db.Store
 
 	mu             sync.RWMutex
 	authStatus     string
 	claudeStatus   string
+	databaseReady  bool
 	loginCancel    context.CancelFunc
 	loginCancelSeq uint64
 }
@@ -44,6 +47,16 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	if err := a.initializeDatabase(); err != nil {
+		log.Printf("SQLite 初期化に失敗しました: %v", err)
+	}
+}
+
+func (a *App) shutdown(context.Context) {
+	if err := a.closeDatabase(); err != nil {
+		log.Printf("SQLite クローズに失敗しました: %v", err)
+	}
 }
 
 func (a *App) AppName() string {
@@ -55,6 +68,7 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 	a.mu.RLock()
 	authStatus := a.authStatus
 	claudeStatus := a.claudeStatus
+	databaseReady := a.databaseReady
 	a.mu.RUnlock()
 
 	baseContext := a.baseContext()
@@ -86,7 +100,7 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		AuthStatus:       authStatus,
 		ClaudeConfigured: claudeConfigured,
 		ClaudeStatus:     claudeStatus,
-		DatabaseReady:    false,
+		DatabaseReady:    databaseReady,
 		LastRunAt:        nil,
 	}
 }
@@ -243,6 +257,13 @@ func (a *App) setClaudeStatus(status string) {
 	a.mu.Unlock()
 }
 
+func (a *App) setDatabaseState(store *db.Store, ready bool) {
+	a.mu.Lock()
+	a.dbStore = store
+	a.databaseReady = ready
+	a.mu.Unlock()
+}
+
 func (a *App) hasLoginInProgress() bool {
 	a.mu.RLock()
 	running := a.loginCancel != nil
@@ -339,6 +360,37 @@ func (a *App) baseContext() context.Context {
 		return a.ctx
 	}
 	return context.Background()
+}
+
+func (a *App) initializeDatabase() error {
+	if err := a.closeDatabase(); err != nil {
+		return err
+	}
+
+	store, err := db.Open(a.baseContext(), db.OpenOptions{
+		AppName: a.AppName(),
+	})
+	if err != nil {
+		a.setDatabaseState(nil, false)
+		return err
+	}
+
+	a.setDatabaseState(store, true)
+	return nil
+}
+
+func (a *App) closeDatabase() error {
+	a.mu.Lock()
+	store := a.dbStore
+	a.dbStore = nil
+	a.databaseReady = false
+	a.mu.Unlock()
+
+	if store == nil {
+		return nil
+	}
+
+	return store.Close()
 }
 
 func (a *App) initialAuthStatus() string {
