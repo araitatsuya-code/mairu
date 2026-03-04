@@ -201,14 +201,21 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
 
         try {
             const result = await checkGmailConnection();
-            await onStatusRefresh();
-
             if (!result.success) {
                 setGmailError(result.message);
-                return;
+            } else {
+                setLastGmailResult(result);
             }
 
-            setLastGmailResult(result);
+            try {
+                await onStatusRefresh();
+            } catch (cause) {
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '状態の再取得に失敗しました。';
+                setGmailError((previous) => (previous ? `${previous} / ${message}` : message));
+            }
         } catch (cause) {
             const message =
                 cause instanceof Error
