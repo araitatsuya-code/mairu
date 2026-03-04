@@ -2,8 +2,13 @@ export type RuntimeStatus = {
     authorized: boolean;
     googleConfigured: boolean;
     authStatus: string;
+    googleTokenPreview: string;
+    gmailConnected: boolean;
+    gmailStatus: string;
+    gmailAccountEmail: string;
     claudeConfigured: boolean;
     claudeStatus: string;
+    claudeKeyPreview: string;
     databaseReady: boolean;
     lastRunAt: string | null;
 };
@@ -24,6 +29,16 @@ export type SecretOperationResult = {
     message: string;
 };
 
+export type GmailConnectionResult = {
+    success: boolean;
+    message: string;
+    emailAddress: string;
+    messagesTotal: number;
+    threadsTotal: number;
+    historyID: string;
+    tokenRefreshed: boolean;
+};
+
 type WailsAppApi = {
     AppName?: () => Promise<string> | string;
     GetRuntimeStatus?: () =>
@@ -31,8 +46,13 @@ type WailsAppApi = {
               Authorized: boolean;
               GoogleConfigured: boolean;
               AuthStatus: string;
+              GoogleTokenPreview?: string;
+              GmailConnected?: boolean;
+              GmailStatus?: string;
+              GmailAccountEmail?: string;
               ClaudeConfigured: boolean;
               ClaudeStatus: string;
+              ClaudeKeyPreview?: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           }>
@@ -40,8 +60,13 @@ type WailsAppApi = {
               Authorized: boolean;
               GoogleConfigured: boolean;
               AuthStatus: string;
+              GoogleTokenPreview?: string;
+              GmailConnected?: boolean;
+              GmailStatus?: string;
+              GmailAccountEmail?: string;
               ClaudeConfigured: boolean;
               ClaudeStatus: string;
+              ClaudeKeyPreview?: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           };
@@ -85,6 +110,25 @@ type WailsAppApi = {
               Success: boolean;
               Message: string;
           };
+    CheckGmailConnection?: () =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+              EmailAddress?: string;
+              MessagesTotal?: number;
+              ThreadsTotal?: number;
+              HistoryID?: string;
+              TokenRefreshed?: boolean;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+              EmailAddress?: string;
+              MessagesTotal?: number;
+              ThreadsTotal?: number;
+              HistoryID?: string;
+              TokenRefreshed?: boolean;
+          };
 };
 
 declare global {
@@ -101,8 +145,13 @@ export const defaultRuntimeStatus: RuntimeStatus = {
     authorized: false,
     googleConfigured: false,
     authStatus: 'Google ログイン設定を確認しています。',
+    googleTokenPreview: '',
+    gmailConnected: false,
+    gmailStatus: 'Google ログイン後に Gmail 接続確認を実行できます。',
+    gmailAccountEmail: '',
     claudeConfigured: false,
     claudeStatus: 'Claude API キー状態を確認しています。',
+    claudeKeyPreview: '',
     databaseReady: false,
     lastRunAt: null,
 };
@@ -132,8 +181,13 @@ export async function loadRuntimeStatus(): Promise<RuntimeStatus> {
         authorized: raw.Authorized,
         googleConfigured: raw.GoogleConfigured,
         authStatus: raw.AuthStatus,
+        googleTokenPreview: raw.GoogleTokenPreview ?? '',
+        gmailConnected: raw.GmailConnected ?? false,
+        gmailStatus: raw.GmailStatus ?? 'Google ログイン後に Gmail 接続確認を実行できます。',
+        gmailAccountEmail: raw.GmailAccountEmail ?? '',
         claudeConfigured: raw.ClaudeConfigured,
         claudeStatus: raw.ClaudeStatus,
+        claudeKeyPreview: raw.ClaudeKeyPreview ?? '',
         databaseReady: raw.DatabaseReady,
         lastRunAt: raw.LastRunAt ?? null,
     };
@@ -200,5 +254,25 @@ export async function clearClaudeAPIKey(): Promise<SecretOperationResult> {
     return {
         success: raw.Success,
         message: raw.Message,
+    };
+}
+
+export async function checkGmailConnection(): Promise<GmailConnectionResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.CheckGmailConnection?.();
+
+    if (!result) {
+        throw new Error('Gmail 接続確認 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+        emailAddress: raw.EmailAddress ?? '',
+        messagesTotal: raw.MessagesTotal ?? 0,
+        threadsTotal: raw.ThreadsTotal ?? 0,
+        historyID: raw.HistoryID ?? '',
+        tokenRefreshed: raw.TokenRefreshed ?? false,
     };
 }
