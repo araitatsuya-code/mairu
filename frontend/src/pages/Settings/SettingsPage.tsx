@@ -197,16 +197,18 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     async function handleCheckGmailConnection() {
         setGmailPending(true);
         setGmailError(null);
+        setLastGmailResult(null);
 
         try {
             const result = await checkGmailConnection();
-            setLastGmailResult(result);
             await onStatusRefresh();
 
             if (!result.success) {
                 setGmailError(result.message);
                 return;
             }
+
+            setLastGmailResult(result);
         } catch (cause) {
             const message =
                 cause instanceof Error
@@ -331,21 +333,27 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 {loginError ? <p className="settings-error-note">{loginError}</p> : null}
                             </div>
                         </li>
-                        <li className="settings-item">
-                            <div className="settings-item-header">
-                                <h3 className="settings-item-title">Gmail API 接続確認</h3>
-                                <span className={`state-chip ${status.gmailConnected ? 'ready' : 'pending'}`}>
+                        <li className="rounded-[28px] border border-slate-400/10 bg-slate-900/50 p-6 shadow-[0_18px_60px_rgba(15,23,42,0.24)]">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <h3 className="text-xl font-semibold text-slate-50">Gmail API 接続確認</h3>
+                                <span
+                                    className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] ${
+                                        status.gmailConnected
+                                            ? 'border-emerald-300/30 bg-emerald-300/10 text-emerald-100'
+                                            : 'border-amber-200/20 bg-amber-200/10 text-amber-100'
+                                    }`}
+                                >
                                     {gmailStateLabel}
                                 </span>
                             </div>
-                            <p className="settings-item-body">
+                            <p className="mt-3 text-sm leading-7 text-slate-300">
                                 保存済みトークンを再利用し、必要なら更新したうえで Gmail プロフィール取得により
                                 接続確認を行います。
                             </p>
-                            <div className="settings-action-stack">
-                                <div className="settings-action-row">
+                            <div className="mt-4 grid gap-3">
+                                <div className="flex flex-wrap items-center gap-3">
                                     <button
-                                        className="settings-action-button"
+                                        className="inline-flex items-center justify-center rounded-[14px] bg-sky-300 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                         type="button"
                                         onClick={() => {
                                             void handleCheckGmailConnection();
@@ -355,33 +363,41 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                         {gmailPending ? '接続確認中...' : 'Gmail 接続確認'}
                                     </button>
                                 </div>
-                                <p className="settings-inline-note">{status.gmailStatus}</p>
+                                <p className="text-sm leading-7 text-sky-100">{status.gmailStatus}</p>
                                 {status.gmailConnected && status.gmailAccountEmail ? (
-                                    <p className="settings-inline-note">
+                                    <p className="text-sm leading-7 text-sky-100">
                                         接続済みアカウント: {status.gmailAccountEmail}
                                     </p>
                                 ) : null}
                                 {lastGmailResult?.success ? (
-                                    <dl className="settings-result-grid">
-                                        <div>
-                                            <dt>アカウント</dt>
-                                            <dd>{lastGmailResult.emailAddress}</dd>
+                                    <dl className="grid gap-3 rounded-[18px] border border-slate-400/10 bg-slate-950/35 p-4 md:grid-cols-2">
+                                        <div className="grid gap-1">
+                                            <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">アカウント</dt>
+                                            <dd className="text-sm font-medium text-slate-50">{lastGmailResult.emailAddress}</dd>
                                         </div>
-                                        <div>
-                                            <dt>メール総数</dt>
-                                            <dd>{lastGmailResult.messagesTotal.toLocaleString('ja-JP')}</dd>
+                                        <div className="grid gap-1">
+                                            <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">メール総数</dt>
+                                            <dd className="text-sm font-medium text-slate-50">
+                                                {lastGmailResult.messagesTotal.toLocaleString('ja-JP')}
+                                            </dd>
                                         </div>
-                                        <div>
-                                            <dt>スレッド総数</dt>
-                                            <dd>{lastGmailResult.threadsTotal.toLocaleString('ja-JP')}</dd>
+                                        <div className="grid gap-1">
+                                            <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">スレッド総数</dt>
+                                            <dd className="text-sm font-medium text-slate-50">
+                                                {lastGmailResult.threadsTotal.toLocaleString('ja-JP')}
+                                            </dd>
                                         </div>
-                                        <div>
-                                            <dt>トークン更新</dt>
-                                            <dd>{lastGmailResult.tokenRefreshed ? '実施' : '未実施'}</dd>
+                                        <div className="grid gap-1">
+                                            <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">トークン更新</dt>
+                                            <dd className="text-sm font-medium text-slate-50">
+                                                {lastGmailResult.tokenRefreshed ? '実施' : '未実施'}
+                                            </dd>
                                         </div>
                                     </dl>
                                 ) : null}
-                                {gmailError ? <p className="settings-error-note">{gmailError}</p> : null}
+                                {gmailError ? (
+                                    <p className="text-sm leading-7 text-rose-300">{gmailError}</p>
+                                ) : null}
                             </div>
                         </li>
                         <li className="settings-item">

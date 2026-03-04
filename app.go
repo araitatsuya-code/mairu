@@ -8,12 +8,15 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"mairu/internal/auth"
 	"mairu/internal/db"
 	"mairu/internal/gmail"
 	"mairu/internal/types"
 )
+
+const gmailConnectionTimeout = 15 * time.Second
 
 type App struct {
 	ctx           context.Context
@@ -109,9 +112,7 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 	if !authorized {
 		gmailConnected = false
 		gmailAccount = ""
-		if shouldUseBlockedGmailMessage(gmailStatus) {
-			gmailStatus = buildBlockedGmailStatusMessage()
-		}
+		gmailStatus = buildBlockedGmailStatusMessage()
 	} else if !gmailConnected && shouldUseReadyGmailMessage(gmailStatus) {
 		gmailStatus = buildReadyGmailStatusMessage()
 	}
@@ -239,7 +240,8 @@ func (a *App) StartGoogleLogin() (types.GoogleLoginResult, error) {
 
 // CheckGmailConnection は保存済みトークンで Gmail API への接続確認を行う。
 func (a *App) CheckGmailConnection() types.GmailConnectionResult {
-	baseContext := a.baseContext()
+	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailConnectionTimeout)
+	defer cancel()
 
 	token, err := a.secretManager.LoadGoogleToken(baseContext)
 	if err != nil {
@@ -487,13 +489,6 @@ func shouldUseUnstoredClaudeMessage(message string) bool {
 }
 
 func shouldUseReadyGmailMessage(message string) bool {
-	trimmed := strings.TrimSpace(message)
-	return trimmed == "" ||
-		trimmed == buildReadyGmailStatusMessage() ||
-		trimmed == buildBlockedGmailStatusMessage()
-}
-
-func shouldUseBlockedGmailMessage(message string) bool {
 	trimmed := strings.TrimSpace(message)
 	return trimmed == "" ||
 		trimmed == buildReadyGmailStatusMessage() ||

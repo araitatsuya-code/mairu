@@ -152,6 +152,30 @@ func TestCheckGmailConnectionRefreshesStoredToken(t *testing.T) {
 	}
 }
 
+func TestGetRuntimeStatusClearsGmailSuccessWhenUnauthorized(t *testing.T) {
+	t.Parallel()
+
+	app := &App{
+		authClient:     auth.NewClient(auth.Config{ClientID: "client-id", ClientSecret: "client-secret"}),
+		secretManager:  auth.NewSecretManager(auth.NewMemorySecretStore()),
+		gmailStatus:    buildGmailConnectedStatusMessage("user@example.com"),
+		gmailConnected: true,
+		gmailAccount:   "user@example.com",
+	}
+
+	status := app.GetRuntimeStatus()
+
+	if status.GmailConnected {
+		t.Fatalf("GmailConnected = true, want false")
+	}
+	if status.GmailStatus != buildBlockedGmailStatusMessage() {
+		t.Fatalf("GmailStatus = %q, want %q", status.GmailStatus, buildBlockedGmailStatusMessage())
+	}
+	if status.GmailAccountEmail != "" {
+		t.Fatalf("GmailAccountEmail = %q, want empty", status.GmailAccountEmail)
+	}
+}
+
 type appRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn appRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
