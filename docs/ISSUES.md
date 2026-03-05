@@ -29,7 +29,7 @@
 | MAIRU-004 | #4 | done | Phase 1 | Google OAuth PKCE ログイン実装 | MAIRU-001, MAIRU-003 |
 | MAIRU-005 | #5 | done | Phase 1 | キーチェーン連携と機密情報保護 | MAIRU-004 |
 | MAIRU-006 | #6 | done | Phase 1 | Gmail API クライアント初期化と接続確認 | MAIRU-004, MAIRU-005 |
-| MAIRU-007 | #7 | blocked | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
+| MAIRU-007 | #7 | in progress | Phase 2 | Claude API クライアントと分類 DTO | MAIRU-002, MAIRU-005 |
 | MAIRU-008 | #8 | blocked | Phase 2 | 分類確認画面と信頼度分岐 UI | MAIRU-003, MAIRU-007 |
 | MAIRU-009 | #9 | blocked | Phase 2 | Gmail アクション実行とラベル管理 | MAIRU-006, MAIRU-008 |
 | MAIRU-010 | #10 | done | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
@@ -126,7 +126,7 @@
   - Phase 1 の完了判定に使える接続確認が実装される
 
 ### MAIRU-007: Claude API クライアントと分類 DTO
-- 状態: `blocked`
+- 状態: `in progress`
 - フェーズ: Phase 2
 - 依存: `MAIRU-002`, `MAIRU-005`
 - 目的: メール分類ロジックの核となる Claude 連携とデータ構造を先に整える。

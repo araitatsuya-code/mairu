@@ -29,6 +29,46 @@ export type SecretOperationResult = {
     message: string;
 };
 
+export type EmailSummary = {
+    id: string;
+    threadID: string;
+    from: string;
+    subject: string;
+    snippet: string;
+    unread: boolean;
+};
+
+export type ClassificationCategory =
+    | 'important'
+    | 'newsletter'
+    | 'junk'
+    | 'archive'
+    | 'unread_priority';
+
+export type ClassificationReviewLevel =
+    | 'auto_apply'
+    | 'review'
+    | 'review_with_reason'
+    | 'hold';
+
+export type ClassificationRequest = {
+    model?: string;
+    messages: EmailSummary[];
+};
+
+export type ClassificationResult = {
+    messageID: string;
+    category: ClassificationCategory;
+    confidence: number;
+    reason: string;
+    reviewLevel: ClassificationReviewLevel;
+};
+
+export type ClassificationResponse = {
+    model: string;
+    results: ClassificationResult[];
+};
+
 export type GmailConnectionResult = {
     success: boolean;
     message: string;
@@ -109,6 +149,37 @@ type WailsAppApi = {
         | {
               Success: boolean;
               Message: string;
+          };
+    ClassifyEmails?: (request: {
+        Model?: string;
+        Messages: Array<{
+            ID: string;
+            ThreadID?: string;
+            From: string;
+            Subject: string;
+            Snippet: string;
+            Unread: boolean;
+        }>;
+    }) =>
+        | Promise<{
+              Model?: string;
+              Results?: Array<{
+                  MessageID: string;
+                  Category: ClassificationCategory;
+                  Confidence: number;
+                  Reason: string;
+                  ReviewLevel: ClassificationReviewLevel;
+              }>;
+          }>
+        | {
+              Model?: string;
+              Results?: Array<{
+                  MessageID: string;
+                  Category: ClassificationCategory;
+                  Confidence: number;
+                  Reason: string;
+                  ReviewLevel: ClassificationReviewLevel;
+              }>;
           };
     CheckGmailConnection?: () =>
         | Promise<{
@@ -254,6 +325,37 @@ export async function clearClaudeAPIKey(): Promise<SecretOperationResult> {
     return {
         success: raw.Success,
         message: raw.Message,
+    };
+}
+
+export async function classifyEmails(request: ClassificationRequest): Promise<ClassificationResponse> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.ClassifyEmails?.({
+        Model: request.model,
+        Messages: request.messages.map((message) => ({
+            ID: message.id,
+            ThreadID: message.threadID,
+            From: message.from,
+            Subject: message.subject,
+            Snippet: message.snippet,
+            Unread: message.unread,
+        })),
+    });
+
+    if (!result) {
+        throw new Error('メール分類 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        model: raw.Model ?? request.model ?? '',
+        results: (raw.Results ?? []).map((item) => ({
+            messageID: item.MessageID,
+            category: item.Category,
+            confidence: item.Confidence,
+            reason: item.Reason,
+            reviewLevel: item.ReviewLevel,
+        })),
     };
 }
 

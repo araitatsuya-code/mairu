@@ -11,16 +11,21 @@ import (
 	"time"
 
 	"mairu/internal/auth"
+	"mairu/internal/claude"
 	"mairu/internal/db"
 	"mairu/internal/gmail"
 	"mairu/internal/types"
 )
 
-const gmailConnectionTimeout = 15 * time.Second
+const (
+	gmailConnectionTimeout      = 15 * time.Second
+	claudeClassificationTimeout = 45 * time.Second
+)
 
 type App struct {
 	ctx           context.Context
 	authClient    *auth.Client
+	claudeClient  *claude.Client
 	gmailClient   *gmail.Client
 	secretManager *auth.SecretManager
 	dbStore       *db.Store
@@ -39,12 +44,16 @@ type App struct {
 func NewApp() *App {
 	clientID := strings.TrimSpace(os.Getenv("MAIRU_GOOGLE_OAUTH_CLIENT_ID"))
 	clientSecret := strings.TrimSpace(os.Getenv("MAIRU_GOOGLE_OAUTH_CLIENT_SECRET"))
+	claudeModel := strings.TrimSpace(os.Getenv("MAIRU_CLAUDE_MODEL"))
 	secretManager := auth.NewSecretManager(auth.NewSystemSecretStore())
 
 	app := &App{
 		authClient: auth.NewClient(auth.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
+		}),
+		claudeClient: claude.NewClient(claude.Options{
+			DefaultModel: claudeModel,
 		}),
 		gmailClient:   gmail.NewClient(gmail.Options{}),
 		secretManager: secretManager,
@@ -296,6 +305,24 @@ func (a *App) CheckGmailConnection() types.GmailConnectionResult {
 		HistoryID:      profile.HistoryID,
 		TokenRefreshed: refreshed,
 	}
+}
+
+// ClassifyEmails は保存済み Claude API キーでメール分類を実行する。
+func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.ClassificationResponse, error) {
+	baseContext, cancel := context.WithTimeout(a.baseContext(), claudeClassificationTimeout)
+	defer cancel()
+
+	apiKey, err := a.secretManager.LoadClaudeAPIKey(baseContext)
+	if err != nil {
+		return types.ClassificationResponse{}, fmt.Errorf("保存済み Claude API キーを読み出せませんでした: %w", err)
+	}
+
+	client := a.claudeClient
+	if client == nil {
+		client = claude.NewClient(claude.Options{})
+	}
+
+	return client.Classify(baseContext, apiKey, request)
 }
 
 // CancelGoogleLogin は進行中の Google ログインを中断する。

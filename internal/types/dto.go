@@ -23,12 +23,70 @@ const (
 	ClassificationCategoryUnreadPriority ClassificationCategory = "unread_priority"
 )
 
+const (
+	ClassificationMaxBatchSize      = 50
+	ClassificationAutoApplyMinimum  = 0.90
+	ClassificationReviewMinimum     = 0.70
+	ClassificationReasonHintMinimum = 0.50
+)
+
+// IsValid は既知の分類カテゴリかを判定する。
+func (c ClassificationCategory) IsValid() bool {
+	switch c {
+	case ClassificationCategoryImportant,
+		ClassificationCategoryNewsletter,
+		ClassificationCategoryJunk,
+		ClassificationCategoryArchive,
+		ClassificationCategoryUnreadPriority:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClassificationReviewLevel は信頼度に応じた UI 上の扱いを表す。
+type ClassificationReviewLevel string
+
+const (
+	ClassificationReviewLevelAutoApply        ClassificationReviewLevel = "auto_apply"
+	ClassificationReviewLevelReview           ClassificationReviewLevel = "review"
+	ClassificationReviewLevelReviewWithReason ClassificationReviewLevel = "review_with_reason"
+	ClassificationReviewLevelHold             ClassificationReviewLevel = "hold"
+)
+
+// ReviewLevelForConfidence は信頼度から UI の分岐を決める。
+func ReviewLevelForConfidence(confidence float64) ClassificationReviewLevel {
+	switch {
+	case confidence >= ClassificationAutoApplyMinimum:
+		return ClassificationReviewLevelAutoApply
+	case confidence >= ClassificationReviewMinimum:
+		return ClassificationReviewLevelReview
+	case confidence >= ClassificationReasonHintMinimum:
+		return ClassificationReviewLevelReviewWithReason
+	default:
+		return ClassificationReviewLevelHold
+	}
+}
+
+// ClassificationRequest は Claude 分類 API 呼び出し入力を表す。
+type ClassificationRequest struct {
+	Model    string
+	Messages []EmailSummary
+}
+
 // ClassificationResult は分類 API と UI 間で共有する結果 DTO。
 type ClassificationResult struct {
-	MessageID  string
-	Category   ClassificationCategory
-	Confidence int
-	Reason     string
+	MessageID   string
+	Category    ClassificationCategory
+	Confidence  float64
+	Reason      string
+	ReviewLevel ClassificationReviewLevel
+}
+
+// ClassificationResponse は Claude 分類 API 呼び出し結果を表す。
+type ClassificationResponse struct {
+	Model   string
+	Results []ClassificationResult
 }
 
 // ActionKind は Gmail に対する実行種別を表す。
