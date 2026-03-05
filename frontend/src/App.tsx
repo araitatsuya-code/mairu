@@ -7,13 +7,17 @@ import {
     loadRuntimeStatus,
     type RuntimeStatus,
 } from './lib/runtime';
+import { ClassifyPage } from './pages/Classify/ClassifyPage';
 import { SettingsPage } from './pages/Settings/SettingsPage';
+
+type AppView = 'settings' | 'classify';
 
 function App() {
     const [appName, setAppName] = useState('Mairu');
     const [status, setStatus] = useState<RuntimeStatus>(defaultRuntimeStatus);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [view, setView] = useState<AppView>('settings');
 
     async function refreshRuntimeStatus(): Promise<RuntimeStatus> {
         const nextStatus = await loadRuntimeStatus();
@@ -72,11 +76,37 @@ function App() {
                         <p>{error}</p>
                     </section>
                 ) : (
-                    <SettingsPage
-                        appName={appName}
-                        status={status}
-                        onStatusRefresh={refreshRuntimeStatus}
-                    />
+                    <div className="app-content">
+                        <nav className="app-nav" aria-label="ページ切り替え">
+                            <button
+                                className={`app-nav-button ${view === 'settings' ? 'active' : ''}`}
+                                type="button"
+                                onClick={() => {
+                                    setView('settings');
+                                }}
+                            >
+                                Settings
+                            </button>
+                            <button
+                                className={`app-nav-button ${view === 'classify' ? 'active' : ''}`}
+                                type="button"
+                                onClick={() => {
+                                    setView('classify');
+                                }}
+                            >
+                                Classify
+                            </button>
+                        </nav>
+                        {view === 'settings' ? (
+                            <SettingsPage
+                                appName={appName}
+                                status={status}
+                                onStatusRefresh={refreshRuntimeStatus}
+                            />
+                        ) : (
+                            <ClassifyPage status={status} />
+                        )}
+                    </div>
                 )}
             </main>
         </div>
