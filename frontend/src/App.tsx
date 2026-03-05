@@ -94,7 +94,7 @@ function App() {
                                     setActivePage('settings');
                                 }}
                             >
-                                Settings
+                                設定
                             </button>
                         </nav>
                         {activePage === 'classify' ? (

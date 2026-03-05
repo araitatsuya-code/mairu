@@ -14,6 +14,12 @@ type ClassificationRow = {
     reason: string;
 };
 
+const AUTO_CONFIDENCE_THRESHOLD = 0.9;
+const CHECK_CONFIDENCE_THRESHOLD = 0.75;
+const MIN_CONFIDENCE = 0.51;
+const CONFIDENCE_DECAY_INTERVAL = 10;
+const CONFIDENCE_DECAY_STEP = 0.02;
+
 const categoryLabelMap: Record<ClassificationCategory, string> = {
     important: '重要',
     newsletter: 'ニュースレター',
@@ -30,35 +36,54 @@ const categoryActionMap: Record<ClassificationCategory, string> = {
     unread_priority: '未読優先ラベルを付けて上位に固定',
 };
 
+const categoryCycle: ClassificationCategory[] = ['important', 'newsletter', 'junk', 'archive', 'unread_priority'];
+const reviewCycle: ClassificationReviewLevel[] = ['auto_apply', 'review', 'review_with_reason', 'review', 'hold'];
+const confidenceBaseCycle = [0.96, 0.88, 0.72, 0.81, 0.67];
+
+function confidencePercentage(confidence: number): number {
+    return Math.round(confidence * 100);
+}
+
+function calculateConfidence(index: number, base: number): number {
+    return Math.max(
+        MIN_CONFIDENCE,
+        base - Math.floor(index / CONFIDENCE_DECAY_INTERVAL) * CONFIDENCE_DECAY_STEP,
+    );
+}
+
 const mockRows: ClassificationRow[] = Array.from({ length: 50 }, (_, index) => {
     const position = index + 1;
-    const categoryCycle: ClassificationCategory[] = ['important', 'newsletter', 'junk', 'archive', 'unread_priority'];
-    const reviewCycle: ClassificationReviewLevel[] = ['auto_apply', 'review', 'review_with_reason', 'review', 'hold'];
-    const confidenceBase = [0.96, 0.88, 0.72, 0.81, 0.67][index % 5];
+    const category = categoryCycle[index % categoryCycle.length];
+    const reviewLevel = reviewCycle[index % reviewCycle.length];
+    const confidenceBase = confidenceBaseCycle[index % confidenceBaseCycle.length];
 
     return {
         messageID: `msg-${String(position).padStart(3, '0')}`,
         from: `sender${position}@example.com`,
         subject: `分類候補メール ${position}`,
-        confidence: Math.max(0.51, confidenceBase - Math.floor(index / 10) * 0.02),
-        category: categoryCycle[index % categoryCycle.length],
-        reviewLevel: reviewCycle[index % reviewCycle.length],
-        reason: `本文要約と送信元傾向から ${categoryLabelMap[categoryCycle[index % categoryCycle.length]]} に分類しました。`,
+        confidence: calculateConfidence(index, confidenceBase),
+        category,
+        reviewLevel,
+        reason: `本文要約と送信元傾向から ${categoryLabelMap[category]} に分類しました。`,
     };
 });
 
 function resolveReviewBucket(row: ClassificationRow): ReviewBucket {
-    if (row.reviewLevel === 'auto_apply' && row.confidence >= 0.9) {
+    if (row.reviewLevel === 'auto_apply' && row.confidence >= AUTO_CONFIDENCE_THRESHOLD) {
         return 'auto';
     }
-    if (row.reviewLevel === 'hold' || row.reviewLevel === 'review_with_reason' || row.confidence < 0.75) {
+    if (
+        row.reviewLevel === 'hold' ||
+        row.reviewLevel === 'review_with_reason' ||
+        row.confidence < CHECK_CONFIDENCE_THRESHOLD
+    ) {
         return 'check';
     }
     return 'approval';
 }
 
 function formatConfidence(confidence: number): string {
-    return `${Math.round(confidence * 100)}%`;
+    return `${confidencePercentage(confidence)}%`;
 }
 
 function bucketLabel(bucket: ReviewBucket): string {
@@ -153,7 +178,7 @@ export function ClassifyPage() {
                                             <div className="classify-confidence-bar" role="presentation">
                                                 <div
                                                     className={`classify-confidence-fill ${bucketClassName(bucket)}`}
-                                                    style={{ width: `${Math.round(row.confidence * 100)}%` }}
+                                                    style={{ width: `${confidencePercentage(row.confidence)}%` }}
                                                 />
                                             </div>
                                         </div>
