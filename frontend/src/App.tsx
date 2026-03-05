@@ -7,13 +7,17 @@ import {
     loadRuntimeStatus,
     type RuntimeStatus,
 } from './lib/runtime';
+import { ClassifyPage } from './pages/Classify/ClassifyPage';
 import { SettingsPage } from './pages/Settings/SettingsPage';
+
+type AppPage = 'classify' | 'settings';
 
 function App() {
     const [appName, setAppName] = useState('Mairu');
     const [status, setStatus] = useState<RuntimeStatus>(defaultRuntimeStatus);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [activePage, setActivePage] = useState<AppPage>('classify');
 
     async function refreshRuntimeStatus(): Promise<RuntimeStatus> {
         const nextStatus = await loadRuntimeStatus();
@@ -72,11 +76,37 @@ function App() {
                         <p>{error}</p>
                     </section>
                 ) : (
-                    <SettingsPage
-                        appName={appName}
-                        status={status}
-                        onStatusRefresh={refreshRuntimeStatus}
-                    />
+                    <>
+                        <nav className="app-nav" aria-label="ページ切り替え">
+                            <button
+                                type="button"
+                                className={`app-nav-button ${activePage === 'classify' ? 'active' : ''}`}
+                                onClick={() => {
+                                    setActivePage('classify');
+                                }}
+                            >
+                                分類確認
+                            </button>
+                            <button
+                                type="button"
+                                className={`app-nav-button ${activePage === 'settings' ? 'active' : ''}`}
+                                onClick={() => {
+                                    setActivePage('settings');
+                                }}
+                            >
+                                Settings
+                            </button>
+                        </nav>
+                        {activePage === 'classify' ? (
+                            <ClassifyPage />
+                        ) : (
+                            <SettingsPage
+                                appName={appName}
+                                status={status}
+                                onStatusRefresh={refreshRuntimeStatus}
+                            />
+                        )}
+                    </>
                 )}
             </main>
         </div>
