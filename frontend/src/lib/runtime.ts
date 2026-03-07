@@ -62,6 +62,7 @@ export type ClassificationResult = {
     confidence: number;
     reason: string;
     reviewLevel: ClassificationReviewLevel;
+    source: 'claude' | 'blocklist';
 };
 
 export type ClassificationResponse = {
@@ -109,6 +110,43 @@ export type ExecuteGmailActionsResult = {
     createdLabels: string[];
     failures: GmailActionFailure[];
     tokenRefreshed: boolean;
+};
+
+export type BlocklistKind = 'sender' | 'domain';
+
+export type BlocklistEntry = {
+    id: number;
+    kind: BlocklistKind;
+    pattern: string;
+    note: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type BlocklistSuggestion = {
+    kind: BlocklistKind;
+    pattern: string;
+    count: number;
+    lastSeenAt: string;
+    description: string;
+};
+
+export type UpsertBlocklistEntryRequest = {
+    kind: BlocklistKind;
+    pattern: string;
+    note: string;
+};
+
+export type BlocklistOperationResult = {
+    success: boolean;
+    message: string;
+};
+
+export type ClassificationCorrection = {
+    messageID: string;
+    sender: string;
+    originalCategory: ClassificationCategory;
+    correctedCategory: ClassificationCategory;
 };
 
 type WailsAppApi = {
@@ -201,6 +239,7 @@ type WailsAppApi = {
                   Confidence: number;
                   Reason: string;
                   ReviewLevel: ClassificationReviewLevel;
+                  Source?: 'claude' | 'blocklist';
               }>;
           }>
         | {
@@ -211,6 +250,7 @@ type WailsAppApi = {
                   Confidence: number;
                   Reason: string;
                   ReviewLevel: ClassificationReviewLevel;
+                  Source?: 'claude' | 'blocklist';
               }>;
           };
     CheckGmailConnection?: () =>
@@ -276,6 +316,78 @@ type WailsAppApi = {
               }>;
               TokenRefreshed?: boolean;
           };
+    GetBlocklistEntries?: () =>
+        | Promise<
+              Array<{
+                  ID: number;
+                  Kind: BlocklistKind;
+                  Pattern: string;
+                  Note: string;
+                  CreatedAt: string;
+                  UpdatedAt: string;
+              }>
+          >
+        | Array<{
+              ID: number;
+              Kind: BlocklistKind;
+              Pattern: string;
+              Note: string;
+              CreatedAt: string;
+              UpdatedAt: string;
+          }>;
+    UpsertBlocklistEntry?: (request: {
+        Kind: BlocklistKind;
+        Pattern: string;
+        Note: string;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    DeleteBlocklistEntry?: (id: number) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    RecordClassificationCorrection?: (request: {
+        MessageID: string;
+        Sender: string;
+        OriginalCategory: ClassificationCategory;
+        CorrectedCategory: ClassificationCategory;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    GetBlocklistSuggestions?: () =>
+        | Promise<
+              Array<{
+                  Kind: BlocklistKind;
+                  Pattern: string;
+                  Count: number;
+                  LastSeenAt: string;
+                  Description: string;
+              }>
+          >
+        | Array<{
+              Kind: BlocklistKind;
+              Pattern: string;
+              Count: number;
+              LastSeenAt: string;
+              Description: string;
+          }>;
 };
 
 declare global {
@@ -431,6 +543,7 @@ export async function classifyEmails(request: ClassificationRequest): Promise<Cl
             confidence: item.Confidence,
             reason: item.Reason,
             reviewLevel: item.ReviewLevel,
+            source: item.Source ?? 'claude',
         })),
     };
 }
@@ -491,4 +604,99 @@ export async function executeGmailActions(
         })),
         tokenRefreshed: raw.TokenRefreshed ?? false,
     };
+}
+
+export async function loadBlocklistEntries(): Promise<BlocklistEntry[]> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.GetBlocklistEntries?.();
+
+    if (!result) {
+        throw new Error('ブロックリスト取得 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return raw.map((item) => ({
+        id: item.ID,
+        kind: item.Kind,
+        pattern: item.Pattern,
+        note: item.Note,
+        createdAt: item.CreatedAt,
+        updatedAt: item.UpdatedAt,
+    }));
+}
+
+export async function upsertBlocklistEntry(
+    request: UpsertBlocklistEntryRequest,
+): Promise<BlocklistOperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.UpsertBlocklistEntry?.({
+        Kind: request.kind,
+        Pattern: request.pattern,
+        Note: request.note,
+    });
+
+    if (!result) {
+        throw new Error('ブロックリスト保存 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function deleteBlocklistEntry(id: number): Promise<BlocklistOperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.DeleteBlocklistEntry?.(id);
+
+    if (!result) {
+        throw new Error('ブロックリスト削除 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function recordClassificationCorrection(
+    correction: ClassificationCorrection,
+): Promise<BlocklistOperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.RecordClassificationCorrection?.({
+        MessageID: correction.messageID,
+        Sender: correction.sender,
+        OriginalCategory: correction.originalCategory,
+        CorrectedCategory: correction.correctedCategory,
+    });
+
+    if (!result) {
+        throw new Error('分類修正履歴 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function loadBlocklistSuggestions(): Promise<BlocklistSuggestion[]> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.GetBlocklistSuggestions?.();
+
+    if (!result) {
+        throw new Error('ブロック提案取得 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return raw.map((item) => ({
+        kind: item.Kind,
+        pattern: item.Pattern,
+        count: item.Count,
+        lastSeenAt: item.LastSeenAt,
+        description: item.Description,
+    }));
 }

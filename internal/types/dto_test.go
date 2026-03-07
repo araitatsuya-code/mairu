@@ -105,3 +105,17 @@ func TestActionKindValues(t *testing.T) {
 		})
 	}
 }
+
+func TestBlocklistKindIsValid(t *testing.T) {
+	t.Parallel()
+
+	if !BlocklistKindSender.IsValid() {
+		t.Fatalf("BlocklistKindSender.IsValid() = false, want true")
+	}
+	if !BlocklistKindDomain.IsValid() {
+		t.Fatalf("BlocklistKindDomain.IsValid() = false, want true")
+	}
+	if BlocklistKind("unknown").IsValid() {
+		t.Fatalf("BlocklistKind(\"unknown\").IsValid() = true, want false")
+	}
+}

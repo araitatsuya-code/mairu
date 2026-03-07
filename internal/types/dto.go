@@ -54,6 +54,14 @@ const (
 	ClassificationReviewLevelHold             ClassificationReviewLevel = "hold"
 )
 
+// ClassificationSource は分類結果の生成元を表す。
+type ClassificationSource string
+
+const (
+	ClassificationSourceClaude    ClassificationSource = "claude"
+	ClassificationSourceBlocklist ClassificationSource = "blocklist"
+)
+
 // ReviewLevelForConfidence は信頼度から UI の分岐を決める。
 func ReviewLevelForConfidence(confidence float64) ClassificationReviewLevel {
 	switch {
@@ -81,12 +89,71 @@ type ClassificationResult struct {
 	Confidence  float64
 	Reason      string
 	ReviewLevel ClassificationReviewLevel
+	Source      ClassificationSource
 }
 
 // ClassificationResponse は Claude 分類 API 呼び出し結果を表す。
 type ClassificationResponse struct {
 	Model   string
 	Results []ClassificationResult
+}
+
+// BlocklistKind はブロックリストの登録単位を表す。
+type BlocklistKind string
+
+const (
+	BlocklistKindSender BlocklistKind = "sender"
+	BlocklistKindDomain BlocklistKind = "domain"
+)
+
+// IsValid は既知のブロック種別かを判定する。
+func (k BlocklistKind) IsValid() bool {
+	switch k {
+	case BlocklistKindSender, BlocklistKindDomain:
+		return true
+	default:
+		return false
+	}
+}
+
+// BlocklistEntry はブロックリスト 1 件分を表す。
+type BlocklistEntry struct {
+	ID        int64
+	Kind      BlocklistKind
+	Pattern   string
+	Note      string
+	CreatedAt string
+	UpdatedAt string
+}
+
+// BlocklistSuggestion は修正履歴ベースの提案を表す。
+type BlocklistSuggestion struct {
+	Kind        BlocklistKind
+	Pattern     string
+	Count       int
+	LastSeenAt  string
+	Description string
+}
+
+// UpsertBlocklistEntryRequest はブロックリスト登録入力を表す。
+type UpsertBlocklistEntryRequest struct {
+	Kind    BlocklistKind
+	Pattern string
+	Note    string
+}
+
+// BlocklistOperationResult はブロックリスト操作の実行結果を表す。
+type BlocklistOperationResult struct {
+	Success bool
+	Message string
+}
+
+// ClassificationCorrection は分類修正履歴の登録入力を表す。
+type ClassificationCorrection struct {
+	MessageID         string
+	Sender            string
+	OriginalCategory  ClassificationCategory
+	CorrectedCategory ClassificationCategory
 }
 
 // ActionKind は Gmail に対する実行種別を表す。

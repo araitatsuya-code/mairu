@@ -9,6 +9,7 @@ import {
     type ClassificationReviewLevel,
     type EmailSummary,
     executeGmailActions,
+    recordClassificationCorrection,
     type ExecuteGmailActionsResult,
     type RuntimeStatus,
 } from '../../lib/runtime';
@@ -75,6 +76,14 @@ const categoryOrder: ClassificationCategory[] = [
 
 const confidencePattern = [0.96, 0.82, 0.63, 0.42, 0.91, 0.74, 0.55, 0.37];
 
+const categoryOptions: Array<{ value: ClassificationCategory; label: string }> = [
+    { value: 'important', label: '重要' },
+    { value: 'newsletter', label: 'ニュースレター' },
+    { value: 'junk', label: '不要' },
+    { value: 'archive', label: 'アーカイブ' },
+    { value: 'unread_priority', label: '未読優先' },
+];
+
 const reviewFilterOptions: Array<{ value: ReviewFilter; label: string }> = [
     { value: 'all', label: 'すべて' },
     { value: 'auto_apply', label: '自動実行' },
@@ -124,6 +133,7 @@ function buildMockResults(messages: EmailSummary[]): ClassificationResponse['res
             confidence,
             reviewLevel: reviewLevelForConfidence(confidence),
             reason: `件名と差出人の傾向から ${category} と判定しました。`,
+            source: 'claude',
         };
     });
 }
@@ -222,11 +232,17 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         buildMockResults(buildSampleMessages(sampleMessageCount)));
     const [filter, setFilter] = useState<ReviewFilter>('all');
     const [selectedForApproval, setSelectedForApproval] = useState<Record<string, boolean>>({});
+    const [correctedCategories, setCorrectedCategories] = useState<
+        Record<string, ClassificationCategory>
+    >({});
     const [classifyModel, setClassifyModel] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [actionPending, setActionPending] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
+    const [correctionMessage, setCorrectionMessage] = useState<string | null>(null);
+    const [correctionError, setCorrectionError] = useState<string | null>(null);
+    const [correctionPendingByID, setCorrectionPendingByID] = useState<Record<string, boolean>>({});
     const [lastActionResult, setLastActionResult] = useState<ExecuteGmailActionsResult | null>(null);
     const [lastClassifiedAt, setLastClassifiedAt] = useState<string | null>(
         new Date().toISOString(),
@@ -278,13 +294,20 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             .filter((row) => selectedForApproval[row.result.messageID])
             .map((row) => ({
                 messageID: row.result.messageID,
-                category: row.result.category,
+                category: correctedCategories[row.result.messageID] ?? row.result.category,
                 reviewLevel: row.result.reviewLevel,
             }));
-    }, [rows, selectedForApproval]);
+    }, [correctedCategories, rows, selectedForApproval]);
 
     function resetApprovalSelection() {
         setSelectedForApproval({});
+    }
+
+    function resetCorrections() {
+        setCorrectedCategories({});
+        setCorrectionMessage(null);
+        setCorrectionError(null);
+        setCorrectionPendingByID({});
     }
 
     function handleGenerateSample() {
@@ -296,6 +319,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
+        resetCorrections();
     }
 
     function handleShowMockResults() {
@@ -305,6 +329,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
+        resetCorrections();
     }
 
     async function handleClassifyWithClaude() {
@@ -326,6 +351,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             setActionError(null);
             setLastActionResult(null);
             resetApprovalSelection();
+            resetCorrections();
         } catch (cause) {
             const message =
                 cause instanceof Error
@@ -342,6 +368,60 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             ...previous,
             [messageID]: !previous[messageID],
         }));
+    }
+
+    async function handleCategoryCorrection(row: ClassifiedRow, nextCategory: ClassificationCategory) {
+        const messageID = row.result.messageID;
+        setCorrectedCategories((previous) => ({
+            ...previous,
+            [messageID]: nextCategory,
+        }));
+
+        if (nextCategory === row.result.category) {
+            setCorrectionError(null);
+            setCorrectionMessage(null);
+            return;
+        }
+
+        if (!row.message) {
+            setCorrectionError('修正履歴の保存対象メール情報が見つかりません。');
+            return;
+        }
+
+        if (!status.databaseReady) {
+            setCorrectionError('SQLite 未初期化のため修正履歴を保存できません。');
+            return;
+        }
+
+        setCorrectionPendingByID((previous) => ({
+            ...previous,
+            [messageID]: true,
+        }));
+        setCorrectionError(null);
+        setCorrectionMessage(null);
+
+        try {
+            const result = await recordClassificationCorrection({
+                messageID,
+                sender: row.message.from,
+                originalCategory: row.result.category,
+                correctedCategory: nextCategory,
+            });
+            if (!result.success) {
+                setCorrectionError(result.message);
+                return;
+            }
+            setCorrectionMessage(
+                `${messageID} の修正を保存しました。3 回以上の同一傾向で Blocklist 提案に表示されます。`,
+            );
+        } catch (cause) {
+            setCorrectionError(cause instanceof Error ? cause.message : '修正履歴の保存に失敗しました。');
+        } finally {
+            setCorrectionPendingByID((previous) => ({
+                ...previous,
+                [messageID]: false,
+            }));
+        }
     }
 
     async function handleExecuteSelectedActions() {
@@ -586,6 +666,11 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                         ))}
                     </div>
                 </div>
+                <p className="classify-inline-note">
+                    分類修正を保存すると、同一送信者/ドメインで 3 回以上の修正時に Blocklist 画面へ提案されます。
+                </p>
+                {correctionMessage ? <p className="classify-inline-note">{correctionMessage}</p> : null}
+                {correctionError ? <p className="classify-error-note">{correctionError}</p> : null}
 
                 <div className="classify-table-wrap">
                     <table>
@@ -593,7 +678,9 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                             <tr>
                                 <th scope="col">承認</th>
                                 <th scope="col">差出人 / 件名</th>
+                                <th scope="col">分類元</th>
                                 <th scope="col">分類</th>
+                                <th scope="col">修正</th>
                                 <th scope="col">信頼度</th>
                                 <th scope="col">推奨アクション</th>
                                 <th scope="col">理由</th>
@@ -609,6 +696,8 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                     Math.max(0, Math.round(numericConfidence * 100)),
                                 );
                                 const approvalEnabled = row.result.reviewLevel !== 'auto_apply';
+                                const resolvedCategory =
+                                    correctedCategories[row.result.messageID] ?? row.result.category;
                                 return (
                                     <tr key={row.result.messageID}>
                                         <td>
@@ -634,12 +723,37 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                             ) : null}
                                         </td>
                                         <td>
-                                            <p className={`category-chip category-${row.result.category}`}>
-                                                {categoryLabel(row.result.category)}
+                                            <p className={`source-chip source-${row.result.source}`}>
+                                                {row.result.source === 'blocklist' ? 'Blocklist' : 'Claude'}
+                                            </p>
+                                        </td>
+                                        <td>
+                                            <p className={`category-chip category-${resolvedCategory}`}>
+                                                {categoryLabel(resolvedCategory)}
                                             </p>
                                             <p className={`review-chip review-${row.result.reviewLevel}`}>
                                                 {reviewLabel(row.result.reviewLevel)}
                                             </p>
+                                        </td>
+                                        <td>
+                                            <select
+                                                className="category-edit-select"
+                                                value={resolvedCategory}
+                                                onChange={(event) => {
+                                                    void handleCategoryCorrection(
+                                                        row,
+                                                        event.target.value as ClassificationCategory,
+                                                    );
+                                                }}
+                                                disabled={pending || Boolean(correctionPendingByID[row.result.messageID])}
+                                                aria-label={`${row.result.messageID} の分類修正`}
+                                            >
+                                                {categoryOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>
+                                                        {option.label}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </td>
                                         <td>
                                             <p className="confidence-value">{confidencePercent}%</p>
@@ -651,7 +765,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                             </div>
                                         </td>
                                         <td className="action-text">
-                                            {recommendedAction(row.result.category, row.result.reviewLevel)}
+                                            {recommendedAction(resolvedCategory, row.result.reviewLevel)}
                                         </td>
                                         <td className="reason-text">{row.result.reason}</td>
                                     </tr>

@@ -7,10 +7,11 @@ import {
     loadRuntimeStatus,
     type RuntimeStatus,
 } from './lib/runtime';
+import { BlocklistPage } from './pages/Blocklist/BlocklistPage';
 import { ClassifyPage } from './pages/Classify/ClassifyPage';
 import { SettingsPage } from './pages/Settings/SettingsPage';
 
-type AppView = 'settings' | 'classify';
+type AppView = 'settings' | 'classify' | 'blocklist';
 
 function App() {
     const [appName, setAppName] = useState('Mairu');
@@ -100,6 +101,17 @@ function App() {
                             >
                                 Classify
                             </button>
+                            <button
+                                className={`app-nav-button ${view === 'blocklist' ? 'active' : ''}`}
+                                type="button"
+                                aria-pressed={view === 'blocklist'}
+                                aria-current={view === 'blocklist' ? 'page' : undefined}
+                                onClick={() => {
+                                    setView('blocklist');
+                                }}
+                            >
+                                Blocklist
+                            </button>
                         </nav>
                         {view === 'settings' ? (
                             <SettingsPage
@@ -107,8 +119,10 @@ function App() {
                                 status={status}
                                 onStatusRefresh={refreshRuntimeStatus}
                             />
-                        ) : (
+                        ) : view === 'classify' ? (
                             <ClassifyPage status={status} />
+                        ) : (
+                            <BlocklistPage status={status} />
                         )}
                     </div>
                 )}
