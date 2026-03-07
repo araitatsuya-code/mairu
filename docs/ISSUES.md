@@ -35,7 +35,7 @@
 | MAIRU-010 | #10 | done | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
 | MAIRU-011 | #11 | done | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
 | MAIRU-012 | #12 | done | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
-| MAIRU-013 | #13 | ready | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
+| MAIRU-013 | #13 | in progress | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
 | MAIRU-014 | #14 | blocked | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
 | MAIRU-015 | 未作成 | backlog | Phase 5 | 移行アシスタント | MAIRU-012 |
 | MAIRU-016 | 未作成 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
@@ -210,7 +210,7 @@
   - `mbox` は次フェーズで着手できる調査結果が残る
 
 ### MAIRU-013: 定期実行スケジューラーと再試行制御
-- 状態: `ready`
+- 状態: `in progress`
 - フェーズ: Phase 4
 - 依存: `MAIRU-009`, `MAIRU-010`, `MAIRU-011`
 - 目的: 起動中アプリで定期的に整理処理を動かす。
