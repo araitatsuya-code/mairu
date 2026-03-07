@@ -86,9 +86,21 @@ export type GmailActionDecision = {
     reviewLevel: ClassificationReviewLevel;
 };
 
+export type GmailActionMetadata = {
+    messageID: string;
+    threadID: string;
+    from: string;
+    subject: string;
+    category: ClassificationCategory;
+    confidence: number;
+    reviewLevel: ClassificationReviewLevel;
+    source: 'claude' | 'blocklist';
+};
+
 export type ExecuteGmailActionsRequest = {
     confirmed: boolean;
     decisions: GmailActionDecision[];
+    metadata: GmailActionMetadata[];
 };
 
 export type GmailActionFailure = {
@@ -142,11 +154,21 @@ export type BlocklistOperationResult = {
     message: string;
 };
 
+export type OperationResult = {
+    success: boolean;
+    message: string;
+};
+
 export type ClassificationCorrection = {
     messageID: string;
     sender: string;
     originalCategory: ClassificationCategory;
     correctedCategory: ClassificationCategory;
+};
+
+export type RecordClassificationRunRequest = {
+    messages: EmailSummary[];
+    results: ClassificationResult[];
 };
 
 type WailsAppApi = {
@@ -279,6 +301,16 @@ type WailsAppApi = {
             Category: ClassificationCategory;
             ReviewLevel: ClassificationReviewLevel;
         }>;
+        Metadata?: Array<{
+            MessageID: string;
+            ThreadID?: string;
+            From?: string;
+            Subject?: string;
+            Category: ClassificationCategory;
+            Confidence: number;
+            ReviewLevel: ClassificationReviewLevel;
+            Source?: 'claude' | 'blocklist';
+        }>;
     }) =>
         | Promise<{
               Success: boolean;
@@ -388,6 +420,56 @@ type WailsAppApi = {
               LastSeenAt: string;
               Description: string;
           }>;
+    RecordClassificationRun?: (request: {
+        Messages: Array<{
+            ID: string;
+            ThreadID?: string;
+            From: string;
+            Subject: string;
+            Snippet: string;
+            Unread: boolean;
+        }>;
+        Results: Array<{
+            MessageID: string;
+            Category: ClassificationCategory;
+            Confidence: number;
+            Reason: string;
+            ReviewLevel: ClassificationReviewLevel;
+            Source?: 'claude' | 'blocklist';
+        }>;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    ExportProcessedMailCSV?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportProcessedMailJSON?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportBlocklistJSON?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ImportBlocklistJSON?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportImportantSummaryCSV?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportImportantSummaryPDF?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportDailyLogsCSV?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
+    ExportDailyLogsJSON?: () =>
+        | Promise<{ Success: boolean; Message: string }>
+        | { Success: boolean; Message: string };
 };
 
 declare global {
@@ -579,6 +661,16 @@ export async function executeGmailActions(
             Category: item.category,
             ReviewLevel: item.reviewLevel,
         })),
+        Metadata: request.metadata.map((item) => ({
+            MessageID: item.messageID,
+            ThreadID: item.threadID,
+            From: item.from,
+            Subject: item.subject,
+            Category: item.category,
+            Confidence: item.confidence,
+            ReviewLevel: item.reviewLevel,
+            Source: item.source,
+        })),
     });
 
     if (!result) {
@@ -701,4 +793,118 @@ export async function loadBlocklistSuggestions(): Promise<BlocklistSuggestion[]>
         lastSeenAt: item.LastSeenAt,
         description: item.Description,
     }));
+}
+
+export async function recordClassificationRun(
+    request: RecordClassificationRunRequest,
+): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.RecordClassificationRun?.({
+        Messages: request.messages.map((message) => ({
+            ID: message.id,
+            ThreadID: message.threadID,
+            From: message.from,
+            Subject: message.subject,
+            Snippet: message.snippet,
+            Unread: message.unread,
+        })),
+        Results: request.results.map((item) => ({
+            MessageID: item.messageID,
+            Category: item.category,
+            Confidence: item.confidence,
+            Reason: item.reason,
+            ReviewLevel: item.reviewLevel,
+            Source: item.source,
+        })),
+    });
+
+    if (!result) {
+        throw new Error('分類ログ保存 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+async function runExportOperation(
+    operation: (() => Promise<{ Success: boolean; Message: string } | { Success: boolean; Message: string }> | { Success: boolean; Message: string } | undefined),
+    missingMessage: string,
+): Promise<OperationResult> {
+    const result = operation?.();
+    if (!result) {
+        throw new Error(missingMessage);
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function exportProcessedMailCSV(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportProcessedMailCSV?.(),
+        '処理済みメール CSV エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportProcessedMailJSON(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportProcessedMailJSON?.(),
+        '処理済みメール JSON エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportBlocklistJSON(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportBlocklistJSON?.(),
+        'blocklist JSON エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function importBlocklistJSON(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ImportBlocklistJSON?.(),
+        'blocklist JSON インポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportImportantSummaryCSV(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportImportantSummaryCSV?.(),
+        '重要メール CSV エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportImportantSummaryPDF(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportImportantSummaryPDF?.(),
+        '重要メール PDF エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportDailyLogsCSV(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportDailyLogsCSV?.(),
+        '日別ログ CSV エクスポート API がまだ公開されていません。',
+    );
+}
+
+export async function exportDailyLogsJSON(): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    return runExportOperation(
+        () => appApi?.ExportDailyLogsJSON?.(),
+        '日別ログ JSON エクスポート API がまだ公開されていません。',
+    );
 }

@@ -93,6 +93,35 @@ var migrations = []migration{
 				ON classification_corrections(sender_domain, created_at DESC)`,
 		},
 	},
+	{
+		version: 3,
+		name:    "add export logs",
+		statements: []string{
+			`ALTER TABLE action_logs ADD COLUMN sender TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE action_logs ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE action_logs ADD COLUMN category TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE action_logs ADD COLUMN confidence REAL NOT NULL DEFAULT 0`,
+			`ALTER TABLE action_logs ADD COLUMN review_level TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE action_logs ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+			`CREATE TABLE IF NOT EXISTS classification_logs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				message_id TEXT NOT NULL,
+				thread_id TEXT NOT NULL DEFAULT '',
+				from_value TEXT NOT NULL DEFAULT '',
+				subject TEXT NOT NULL DEFAULT '',
+				snippet TEXT NOT NULL DEFAULT '',
+				category TEXT NOT NULL,
+				confidence REAL NOT NULL DEFAULT 0,
+				review_level TEXT NOT NULL,
+				source TEXT NOT NULL,
+				classified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_classification_logs_classified_at
+				ON classification_logs(classified_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_classification_logs_category
+				ON classification_logs(category, classified_at DESC)`,
+		},
+	},
 }
 
 // Open は SQLite を初期化し、必要なマイグレーションを適用した Store を返す。
@@ -350,6 +379,55 @@ func (s *Store) DeleteBlocklistEntry(ctx context.Context, id int64) (bool, error
 	return affected > 0, nil
 }
 
+// ImportBlocklistEntries は JSON から読み込んだ blocklist を一括登録する。
+func (s *Store) ImportBlocklistEntries(
+	ctx context.Context,
+	entries []types.UpsertBlocklistEntryRequest,
+) (int, error) {
+	if err := s.ensureReady(); err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("blocklist import を開始できませんでした: %w", err)
+	}
+
+	imported := 0
+	for _, entry := range entries {
+		normalizedPattern, err := normalizeBlockPattern(entry.Kind, entry.Pattern)
+		if err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO blocklist (kind, pattern, note, created_at, updated_at)
+			VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			ON CONFLICT(kind, pattern) DO UPDATE SET
+				note = excluded.note,
+				updated_at = CURRENT_TIMESTAMP`,
+			entry.Kind,
+			normalizedPattern,
+			strings.TrimSpace(entry.Note),
+		); err != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("blocklist import に失敗しました: %w", err)
+		}
+		imported++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("blocklist import を確定できませんでした: %w", err)
+	}
+
+	return imported, nil
+}
+
 // RecordClassificationCorrection は分類修正履歴を保存する。
 func (s *Store) RecordClassificationCorrection(
 	ctx context.Context,
@@ -394,6 +472,245 @@ func (s *Store) RecordClassificationCorrection(
 	}
 
 	return nil
+}
+
+// RecordClassificationLogEntries は分類結果を一括で保存する。
+func (s *Store) RecordClassificationLogEntries(
+	ctx context.Context,
+	entries []types.ClassificationLogEntry,
+) error {
+	if err := s.ensureReady(); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("分類ログ保存を開始できませんでした: %w", err)
+	}
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.MessageID) == "" {
+			tx.Rollback()
+			return errors.New("classification log の message_id は必須です")
+		}
+		if !entry.Category.IsValid() {
+			tx.Rollback()
+			return errors.New("classification log の category が不正です")
+		}
+		if !entry.ReviewLevel.IsValid() {
+			tx.Rollback()
+			return errors.New("classification log の review_level が不正です")
+		}
+		if !entry.Source.IsValid() {
+			tx.Rollback()
+			return errors.New("classification log の source が不正です")
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO classification_logs (
+				message_id,
+				thread_id,
+				from_value,
+				subject,
+				snippet,
+				category,
+				confidence,
+				review_level,
+				source,
+				classified_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+			strings.TrimSpace(entry.MessageID),
+			strings.TrimSpace(entry.ThreadID),
+			strings.TrimSpace(entry.From),
+			strings.TrimSpace(entry.Subject),
+			strings.TrimSpace(entry.Snippet),
+			entry.Category,
+			entry.Confidence,
+			entry.ReviewLevel,
+			entry.Source,
+		); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("分類ログを保存できませんでした: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("分類ログ保存を確定できませんでした: %w", err)
+	}
+
+	return nil
+}
+
+// ListClassificationLogEntries は分類ログを新しい順で返す。
+func (s *Store) ListClassificationLogEntries(ctx context.Context) ([]types.ClassificationLogEntry, error) {
+	if err := s.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, message_id, thread_id, from_value, subject, snippet, category, confidence,
+			review_level, source, classified_at
+		FROM classification_logs
+		ORDER BY classified_at DESC, id DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("分類ログ一覧を取得できませんでした: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]types.ClassificationLogEntry, 0)
+	for rows.Next() {
+		var item types.ClassificationLogEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.MessageID,
+			&item.ThreadID,
+			&item.From,
+			&item.Subject,
+			&item.Snippet,
+			&item.Category,
+			&item.Confidence,
+			&item.ReviewLevel,
+			&item.Source,
+			&item.ClassifiedAt,
+		); err != nil {
+			return nil, fmt.Errorf("分類ログを読み取れませんでした: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("分類ログ走査に失敗しました: %w", err)
+	}
+
+	return items, nil
+}
+
+// RecordActionLogEntries は処理済みメールログを一括で保存する。
+func (s *Store) RecordActionLogEntries(ctx context.Context, entries []types.ActionLogEntry) error {
+	if err := s.ensureReady(); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("処理ログ保存を開始できませんでした: %w", err)
+	}
+
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.MessageID) == "" {
+			tx.Rollback()
+			return errors.New("action log の message_id は必須です")
+		}
+		if strings.TrimSpace(entry.Status) == "" {
+			tx.Rollback()
+			return errors.New("action log の status は必須です")
+		}
+		if !entry.Category.IsValid() {
+			tx.Rollback()
+			return errors.New("action log の category が不正です")
+		}
+		if !entry.ReviewLevel.IsValid() {
+			tx.Rollback()
+			return errors.New("action log の review_level が不正です")
+		}
+		if !entry.Source.IsValid() {
+			tx.Rollback()
+			return errors.New("action log の source が不正です")
+		}
+
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO action_logs (
+				message_id,
+				thread_id,
+				action_kind,
+				status,
+				detail,
+				sender,
+				subject,
+				category,
+				confidence,
+				review_level,
+				source,
+				created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+			strings.TrimSpace(entry.MessageID),
+			strings.TrimSpace(entry.ThreadID),
+			entry.ActionKind,
+			strings.TrimSpace(entry.Status),
+			strings.TrimSpace(entry.Detail),
+			strings.TrimSpace(entry.From),
+			strings.TrimSpace(entry.Subject),
+			entry.Category,
+			entry.Confidence,
+			entry.ReviewLevel,
+			entry.Source,
+		); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("処理ログを保存できませんでした: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("処理ログ保存を確定できませんでした: %w", err)
+	}
+
+	return nil
+}
+
+// ListActionLogEntries は処理済みメールログを新しい順で返す。
+func (s *Store) ListActionLogEntries(ctx context.Context) ([]types.ActionLogEntry, error) {
+	if err := s.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, message_id, thread_id, sender, subject, action_kind, status, detail,
+			category, confidence, review_level, source, created_at
+		FROM action_logs
+		ORDER BY created_at DESC, id DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("処理ログ一覧を取得できませんでした: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]types.ActionLogEntry, 0)
+	for rows.Next() {
+		var item types.ActionLogEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.MessageID,
+			&item.ThreadID,
+			&item.From,
+			&item.Subject,
+			&item.ActionKind,
+			&item.Status,
+			&item.Detail,
+			&item.Category,
+			&item.Confidence,
+			&item.ReviewLevel,
+			&item.Source,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("処理ログを読み取れませんでした: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("処理ログ走査に失敗しました: %w", err)
+	}
+
+	return items, nil
 }
 
 // ListBlocklistSuggestions は修正履歴からブロック候補を返す。

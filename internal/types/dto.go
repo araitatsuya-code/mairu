@@ -58,6 +58,19 @@ const (
 	ClassificationReviewLevelHold             ClassificationReviewLevel = "hold"
 )
 
+// IsValid は既知のレビュー分岐かを判定する。
+func (l ClassificationReviewLevel) IsValid() bool {
+	switch l {
+	case ClassificationReviewLevelAutoApply,
+		ClassificationReviewLevelReview,
+		ClassificationReviewLevelReviewWithReason,
+		ClassificationReviewLevelHold:
+		return true
+	default:
+		return false
+	}
+}
+
 // ClassificationSource は分類結果の生成元を表す。
 type ClassificationSource string
 
@@ -237,6 +250,7 @@ type GmailActionDecision struct {
 type ExecuteGmailActionsRequest struct {
 	Confirmed bool
 	Decisions []GmailActionDecision
+	Metadata  []GmailActionMetadata
 }
 
 // GmailActionFailure は Gmail アクション失敗詳細を表す。
@@ -260,6 +274,62 @@ type ExecuteGmailActionsResult struct {
 	CreatedLabels   []string
 	Failures        []GmailActionFailure
 	TokenRefreshed  bool
+}
+
+// GmailActionMetadata はログ保存に必要なメール情報を表す。
+type GmailActionMetadata struct {
+	MessageID   string
+	ThreadID    string
+	From        string
+	Subject     string
+	Category    ClassificationCategory
+	Confidence  float64
+	ReviewLevel ClassificationReviewLevel
+	Source      ClassificationSource
+}
+
+// OperationResult は一般的な実行結果を表す。
+type OperationResult struct {
+	Success bool
+	Message string
+}
+
+// RecordClassificationRunRequest は分類結果一括保存の入力を表す。
+type RecordClassificationRunRequest struct {
+	Messages []EmailSummary
+	Results  []ClassificationResult
+}
+
+// ClassificationLogEntry は分類ログ 1 件分を表す。
+type ClassificationLogEntry struct {
+	ID           int64
+	MessageID    string
+	ThreadID     string
+	From         string
+	Subject      string
+	Snippet      string
+	Category     ClassificationCategory
+	Confidence   float64
+	ReviewLevel  ClassificationReviewLevel
+	Source       ClassificationSource
+	ClassifiedAt string
+}
+
+// ActionLogEntry は処理済みメールログ 1 件分を表す。
+type ActionLogEntry struct {
+	ID          int64
+	MessageID   string
+	ThreadID    string
+	From        string
+	Subject     string
+	ActionKind  ActionKind
+	Status      string
+	Detail      string
+	Category    ClassificationCategory
+	Confidence  float64
+	ReviewLevel ClassificationReviewLevel
+	Source      ClassificationSource
+	CreatedAt   string
 }
 
 // RuntimeStatus は設定画面や初期化処理で共有する状態 DTO。

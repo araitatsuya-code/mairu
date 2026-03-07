@@ -9,9 +9,10 @@ import {
 } from './lib/runtime';
 import { BlocklistPage } from './pages/Blocklist/BlocklistPage';
 import { ClassifyPage } from './pages/Classify/ClassifyPage';
+import { ExportPage } from './pages/Export/ExportPage';
 import { SettingsPage } from './pages/Settings/SettingsPage';
 
-type AppView = 'settings' | 'classify' | 'blocklist';
+type AppView = 'settings' | 'classify' | 'blocklist' | 'export';
 
 function App() {
     const [appName, setAppName] = useState('Mairu');
@@ -112,6 +113,17 @@ function App() {
                             >
                                 Blocklist
                             </button>
+                            <button
+                                className={`app-nav-button ${view === 'export' ? 'active' : ''}`}
+                                type="button"
+                                aria-pressed={view === 'export'}
+                                aria-current={view === 'export' ? 'page' : undefined}
+                                onClick={() => {
+                                    setView('export');
+                                }}
+                            >
+                                Export
+                            </button>
                         </nav>
                         {view === 'settings' ? (
                             <SettingsPage
@@ -121,6 +133,8 @@ function App() {
                             />
                         ) : view === 'classify' ? (
                             <ClassifyPage status={status} />
+                        ) : view === 'export' ? (
+                            <ExportPage status={status} />
                         ) : (
                             <BlocklistPage status={status} />
                         )}
