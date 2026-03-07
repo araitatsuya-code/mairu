@@ -33,7 +33,7 @@
 | MAIRU-008 | #8 | done | Phase 2 | 分類確認画面と信頼度分岐 UI | MAIRU-003, MAIRU-007 |
 | MAIRU-009 | #9 | done | Phase 2 | Gmail アクション実行とラベル管理 | MAIRU-006, MAIRU-008 |
 | MAIRU-010 | #10 | done | Phase 3 | SQLite 初期化、スキーマ、マイグレーション | MAIRU-002 |
-| MAIRU-011 | #11 | ready | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
+| MAIRU-011 | #11 | in progress | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
 | MAIRU-012 | #12 | blocked | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
 | MAIRU-013 | #13 | blocked | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
 | MAIRU-014 | #14 | blocked | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
@@ -181,7 +181,7 @@
   - スキーマ更新を安全に適用できる
 
 ### MAIRU-011: ブロックリスト管理と AI スキップ処理
-- 状態: `ready`
+- 状態: `in progress`
 - フェーズ: Phase 3
 - 依存: `MAIRU-009`, `MAIRU-010`
 - 目的: コスト最適化のため、既知の不要送信者を AI 分析前に処理できるようにする。

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mairu/internal/types"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -70,6 +72,25 @@ var migrations = []migration{
 			)`,
 			`CREATE INDEX IF NOT EXISTS idx_blocklist_kind_pattern ON blocklist(kind, pattern)`,
 			`CREATE INDEX IF NOT EXISTS idx_action_logs_created_at ON action_logs(created_at DESC)`,
+		},
+	},
+	{
+		version: 2,
+		name:    "create classification corrections",
+		statements: []string{
+			`CREATE TABLE IF NOT EXISTS classification_corrections (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				message_id TEXT NOT NULL DEFAULT '',
+				sender_email TEXT NOT NULL,
+				sender_domain TEXT NOT NULL DEFAULT '',
+				original_category TEXT NOT NULL,
+				corrected_category TEXT NOT NULL,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_classification_corrections_sender_email
+				ON classification_corrections(sender_email, created_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS idx_classification_corrections_sender_domain
+				ON classification_corrections(sender_domain, created_at DESC)`,
 		},
 	},
 }
@@ -214,6 +235,273 @@ func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error
 	}
 
 	return value, true, nil
+}
+
+// ListBlocklistEntries は登録済みブロックリストを一覧で返す。
+func (s *Store) ListBlocklistEntries(ctx context.Context) ([]types.BlocklistEntry, error) {
+	if err := s.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, kind, pattern, note, created_at, updated_at
+		FROM blocklist
+		ORDER BY updated_at DESC, id DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("blocklist 一覧を取得できませんでした: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]types.BlocklistEntry, 0)
+	for rows.Next() {
+		var item types.BlocklistEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.Kind,
+			&item.Pattern,
+			&item.Note,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("blocklist を読み取れませんでした: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("blocklist 走査に失敗しました: %w", err)
+	}
+
+	return items, nil
+}
+
+// UpsertBlocklistEntry は sender/domain ブロックを追加または更新する。
+func (s *Store) UpsertBlocklistEntry(
+	ctx context.Context,
+	kind types.BlocklistKind,
+	pattern string,
+	note string,
+) (types.BlocklistEntry, error) {
+	if err := s.ensureReady(); err != nil {
+		return types.BlocklistEntry{}, err
+	}
+
+	normalizedPattern, err := normalizeBlockPattern(kind, pattern)
+	if err != nil {
+		return types.BlocklistEntry{}, err
+	}
+
+	trimmedNote := strings.TrimSpace(note)
+	if _, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO blocklist (kind, pattern, note, created_at, updated_at)
+		VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(kind, pattern) DO UPDATE SET
+			note = excluded.note,
+			updated_at = CURRENT_TIMESTAMP`,
+		kind,
+		normalizedPattern,
+		trimmedNote,
+	); err != nil {
+		return types.BlocklistEntry{}, fmt.Errorf("blocklist を保存できませんでした: %w", err)
+	}
+
+	var item types.BlocklistEntry
+	err = s.db.QueryRowContext(
+		ctx,
+		`SELECT id, kind, pattern, note, created_at, updated_at
+		FROM blocklist
+		WHERE kind = ? AND pattern = ?`,
+		kind,
+		normalizedPattern,
+	).Scan(
+		&item.ID,
+		&item.Kind,
+		&item.Pattern,
+		&item.Note,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return types.BlocklistEntry{}, fmt.Errorf("保存後の blocklist を取得できませんでした: %w", err)
+	}
+
+	return item, nil
+}
+
+// DeleteBlocklistEntry は ID 指定でブロックリストを削除する。
+func (s *Store) DeleteBlocklistEntry(ctx context.Context, id int64) (bool, error) {
+	if err := s.ensureReady(); err != nil {
+		return false, err
+	}
+	if id <= 0 {
+		return false, errors.New("blocklist の ID は 1 以上で指定してください")
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM blocklist WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("blocklist を削除できませんでした: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("削除結果を確認できませんでした: %w", err)
+	}
+	return affected > 0, nil
+}
+
+// RecordClassificationCorrection は分類修正履歴を保存する。
+func (s *Store) RecordClassificationCorrection(
+	ctx context.Context,
+	correction types.ClassificationCorrection,
+) error {
+	if err := s.ensureReady(); err != nil {
+		return err
+	}
+	if !correction.OriginalCategory.IsValid() {
+		return errors.New("original_category が不正です")
+	}
+	if !correction.CorrectedCategory.IsValid() {
+		return errors.New("corrected_category が不正です")
+	}
+
+	senderEmail := types.NormalizeSenderAddress(correction.Sender)
+	if senderEmail == "" {
+		return errors.New("sender は有効なメールアドレスを含めてください")
+	}
+	senderDomain := types.SenderDomain(senderEmail)
+	if senderDomain == "" {
+		return errors.New("sender からドメインを抽出できませんでした")
+	}
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO classification_corrections (
+			message_id,
+			sender_email,
+			sender_domain,
+			original_category,
+			corrected_category
+		) VALUES (?, ?, ?, ?, ?)`,
+		strings.TrimSpace(correction.MessageID),
+		senderEmail,
+		senderDomain,
+		correction.OriginalCategory,
+		correction.CorrectedCategory,
+	)
+	if err != nil {
+		return fmt.Errorf("分類修正履歴を保存できませんでした: %w", err)
+	}
+
+	return nil
+}
+
+// ListBlocklistSuggestions は修正履歴からブロック候補を返す。
+func (s *Store) ListBlocklistSuggestions(
+	ctx context.Context,
+	minCount int,
+) ([]types.BlocklistSuggestion, error) {
+	if err := s.ensureReady(); err != nil {
+		return nil, err
+	}
+
+	threshold := minCount
+	if threshold < 1 {
+		threshold = 1
+	}
+
+	suggestions := make([]types.BlocklistSuggestion, 0)
+
+	senderRows, err := s.db.QueryContext(
+		ctx,
+		`SELECT c.sender_email, COUNT(*) AS hit_count, MAX(c.created_at) AS last_seen_at
+		FROM classification_corrections c
+		WHERE c.corrected_category = ?
+			AND c.sender_email <> ''
+			AND NOT EXISTS (
+				SELECT 1
+				FROM blocklist b
+				WHERE b.kind = ? AND b.pattern = c.sender_email
+			)
+		GROUP BY c.sender_email
+		HAVING hit_count >= ?
+		ORDER BY hit_count DESC, last_seen_at DESC`,
+		types.ClassificationCategoryJunk,
+		types.BlocklistKindSender,
+		threshold,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("送信者提案を取得できませんでした: %w", err)
+	}
+	defer senderRows.Close()
+
+	for senderRows.Next() {
+		var pattern string
+		var count int
+		var lastSeenAt string
+		if err := senderRows.Scan(&pattern, &count, &lastSeenAt); err != nil {
+			return nil, fmt.Errorf("送信者提案を読み取れませんでした: %w", err)
+		}
+		suggestions = append(suggestions, types.BlocklistSuggestion{
+			Kind:        types.BlocklistKindSender,
+			Pattern:     pattern,
+			Count:       count,
+			LastSeenAt:  lastSeenAt,
+			Description: fmt.Sprintf("同一送信者を junk へ %d 回修正", count),
+		})
+	}
+	if err := senderRows.Err(); err != nil {
+		return nil, fmt.Errorf("送信者提案の走査に失敗しました: %w", err)
+	}
+
+	domainRows, err := s.db.QueryContext(
+		ctx,
+		`SELECT
+			c.sender_domain,
+			COUNT(*) AS hit_count,
+			COUNT(DISTINCT c.sender_email) AS unique_sender_count,
+			MAX(c.created_at) AS last_seen_at
+		FROM classification_corrections c
+		WHERE c.corrected_category = ?
+			AND c.sender_domain <> ''
+			AND NOT EXISTS (
+				SELECT 1
+				FROM blocklist b
+				WHERE b.kind = ? AND b.pattern = c.sender_domain
+			)
+		GROUP BY c.sender_domain
+		HAVING hit_count >= ? AND unique_sender_count >= 2
+		ORDER BY hit_count DESC, last_seen_at DESC`,
+		types.ClassificationCategoryJunk,
+		types.BlocklistKindDomain,
+		threshold,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ドメイン提案を取得できませんでした: %w", err)
+	}
+	defer domainRows.Close()
+
+	for domainRows.Next() {
+		var pattern string
+		var count int
+		var uniqueSenders int
+		var lastSeenAt string
+		if err := domainRows.Scan(&pattern, &count, &uniqueSenders, &lastSeenAt); err != nil {
+			return nil, fmt.Errorf("ドメイン提案を読み取れませんでした: %w", err)
+		}
+		suggestions = append(suggestions, types.BlocklistSuggestion{
+			Kind:        types.BlocklistKindDomain,
+			Pattern:     pattern,
+			Count:       count,
+			LastSeenAt:  lastSeenAt,
+			Description: fmt.Sprintf("同一ドメインを junk へ %d 回修正 (%d 送信者)", count, uniqueSenders),
+		})
+	}
+	if err := domainRows.Err(); err != nil {
+		return nil, fmt.Errorf("ドメイン提案の走査に失敗しました: %w", err)
+	}
+
+	return suggestions, nil
 }
 
 func (s *Store) configure(ctx context.Context) error {
@@ -365,4 +653,36 @@ func resolvePath(options OpenOptions) (string, error) {
 	}
 
 	return DefaultPath(options.AppName)
+}
+
+func normalizeBlockPattern(kind types.BlocklistKind, pattern string) (string, error) {
+	if !kind.IsValid() {
+		return "", errors.New("blocklist kind は sender か domain を指定してください")
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(pattern))
+	if normalized == "" {
+		return "", errors.New("blocklist pattern は必須です")
+	}
+
+	switch kind {
+	case types.BlocklistKindSender:
+		normalized = types.NormalizeSenderAddress(normalized)
+		if normalized == "" {
+			return "", errors.New("sender は有効なメールアドレスを含めてください")
+		}
+		return normalized, nil
+	case types.BlocklistKindDomain:
+		normalized = strings.TrimPrefix(normalized, "@")
+		if at := strings.LastIndex(normalized, "@"); at >= 0 {
+			normalized = normalized[at+1:]
+		}
+		normalized = strings.TrimSpace(normalized)
+		if normalized == "" || strings.Contains(normalized, " ") {
+			return "", errors.New("domain は有効なドメインを指定してください")
+		}
+		return normalized, nil
+	default:
+		return "", errors.New("blocklist kind は sender か domain を指定してください")
+	}
 }

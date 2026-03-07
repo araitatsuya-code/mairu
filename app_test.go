@@ -4,12 +4,14 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"mairu/internal/auth"
 	"mairu/internal/claude"
+	"mairu/internal/db"
 	"mairu/internal/gmail"
 	"mairu/internal/types"
 )
@@ -245,6 +247,245 @@ func TestClassifyEmailsUsesStoredClaudeAPIKey(t *testing.T) {
 	}
 	if result.Results[0].ReviewLevel != types.ClassificationReviewLevelAutoApply {
 		t.Fatalf("ReviewLevel = %q, want %q", result.Results[0].ReviewLevel, types.ClassificationReviewLevelAutoApply)
+	}
+}
+
+func TestClassifyEmailsRejectsEmptyMessages(t *testing.T) {
+	t.Parallel()
+
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveClaudeAPIKey(context.Background(), "claude-secret"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	app := &App{
+		secretManager: manager,
+		claudeClient:  claude.NewClient(claude.Options{}),
+	}
+
+	_, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: nil,
+	})
+	if err == nil {
+		t.Fatalf("ClassifyEmails returned nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "分類対象のメールがありません") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClassifyEmailsSkipsBlockedSenderWithoutClaudeKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if _, err := store.UpsertBlocklistEntry(ctx, types.BlocklistKindSender, "promo@example.com", "manual"); err != nil {
+		t.Fatalf("UpsertBlocklistEntry returned error: %v", err)
+	}
+
+	app := &App{
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{
+				ID:      "msg-1",
+				From:    "promo@example.com",
+				Subject: "promo",
+				Snippet: "sale",
+				Unread:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEmails returned error: %v", err)
+	}
+	if result.Model != "blocklist-skip" {
+		t.Fatalf("Model = %q, want %q", result.Model, "blocklist-skip")
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].Source != types.ClassificationSourceBlocklist {
+		t.Fatalf("Source = %q, want %q", result.Results[0].Source, types.ClassificationSourceBlocklist)
+	}
+	if result.Results[0].Category != types.ClassificationCategoryJunk {
+		t.Fatalf("Category = %q, want %q", result.Results[0].Category, types.ClassificationCategoryJunk)
+	}
+}
+
+func TestClassifyEmailsSkipsBlockedDomainWithoutClaudeKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if _, err := store.UpsertBlocklistEntry(ctx, types.BlocklistKindDomain, "example.com", "manual"); err != nil {
+		t.Fatalf("UpsertBlocklistEntry returned error: %v", err)
+	}
+
+	app := &App{
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{
+				ID:      "msg-1",
+				From:    "noreply@example.com",
+				Subject: "promo",
+				Snippet: "sale",
+				Unread:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEmails returned error: %v", err)
+	}
+	if result.Model != "blocklist-skip" {
+		t.Fatalf("Model = %q, want %q", result.Model, "blocklist-skip")
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].Source != types.ClassificationSourceBlocklist {
+		t.Fatalf("Source = %q, want %q", result.Results[0].Source, types.ClassificationSourceBlocklist)
+	}
+}
+
+func TestClassifyEmailsCallsClaudeOnlyForUnblockedMessages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if _, err := store.UpsertBlocklistEntry(ctx, types.BlocklistKindSender, "block@example.com", "manual"); err != nil {
+		t.Fatalf("UpsertBlocklistEntry returned error: %v", err)
+	}
+
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
+	if err := manager.SaveClaudeAPIKey(ctx, "claude-secret"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() != "https://claude.test/v1/messages" {
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("ReadAll returned error: %v", err)
+			}
+			bodyText := string(body)
+			if strings.Contains(bodyText, "msg-block") {
+				t.Fatalf("blocked message was sent to Claude payload: %s", bodyText)
+			}
+			if !strings.Contains(bodyText, "msg-open") {
+				t.Fatalf("unblocked message not found in payload: %s", bodyText)
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{
+					"content":[
+						{
+							"type":"text",
+							"text":"[{\"id\":\"msg-open\",\"category\":\"important\",\"confidence\":0.91,\"reason\":\"need action\"}]"
+						}
+					]
+				}`)),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		secretManager: manager,
+		claudeClient: claude.NewClient(claude.Options{
+			BaseURL:      "https://claude.test",
+			DefaultModel: "claude-test-model",
+			HTTPClient:   httpClient,
+		}),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{
+				ID:      "msg-block",
+				From:    "block@example.com",
+				Subject: "promo",
+				Snippet: "sale",
+				Unread:  true,
+			},
+			{
+				ID:      "msg-open",
+				From:    "boss@example.com",
+				Subject: "urgent",
+				Snippet: "reply",
+				Unread:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEmails returned error: %v", err)
+	}
+	if len(result.Results) != 2 {
+		t.Fatalf("Results length = %d, want 2", len(result.Results))
+	}
+	if result.Results[0].MessageID != "msg-block" {
+		t.Fatalf("first MessageID = %q, want %q", result.Results[0].MessageID, "msg-block")
+	}
+	if result.Results[0].Source != types.ClassificationSourceBlocklist {
+		t.Fatalf("first Source = %q, want %q", result.Results[0].Source, types.ClassificationSourceBlocklist)
+	}
+	if result.Results[1].MessageID != "msg-open" {
+		t.Fatalf("second MessageID = %q, want %q", result.Results[1].MessageID, "msg-open")
+	}
+	if result.Results[1].Source != types.ClassificationSourceClaude {
+		t.Fatalf("second Source = %q, want %q", result.Results[1].Source, types.ClassificationSourceClaude)
 	}
 }
 

@@ -347,6 +347,27 @@
     font-weight: 700;
 }
 
+.source-chip {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.source-claude {
+    color: #082f49;
+    background: #bae6fd;
+}
+
+.source-blocklist {
+    color: #14532d;
+    background: #bbf7d0;
+}
+
 .review-chip {
     margin-top: 8px;
 }
@@ -399,6 +420,20 @@
 .confidence-value {
     margin: 0;
     font-weight: 700;
+}
+
+.category-edit-select {
+    border: 1px solid rgba(148, 163, 184, 0.6);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.4);
+    color: #f8fafc;
+    padding: 6px 8px;
+    font-size: 0.82rem;
+}
+
+.category-edit-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .confidence-track {

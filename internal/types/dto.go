@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"net/mail"
+	"strings"
+	"time"
+)
 
 // EmailSummary は Gmail と Claude の間で共通利用するメール概要 DTO。
 type EmailSummary struct {
@@ -54,6 +58,24 @@ const (
 	ClassificationReviewLevelHold             ClassificationReviewLevel = "hold"
 )
 
+// ClassificationSource は分類結果の生成元を表す。
+type ClassificationSource string
+
+const (
+	ClassificationSourceClaude    ClassificationSource = "claude"
+	ClassificationSourceBlocklist ClassificationSource = "blocklist"
+)
+
+// IsValid は既知の分類ソースかを判定する。
+func (s ClassificationSource) IsValid() bool {
+	switch s {
+	case ClassificationSourceClaude, ClassificationSourceBlocklist:
+		return true
+	default:
+		return false
+	}
+}
+
 // ReviewLevelForConfidence は信頼度から UI の分岐を決める。
 func ReviewLevelForConfidence(confidence float64) ClassificationReviewLevel {
 	switch {
@@ -81,12 +103,110 @@ type ClassificationResult struct {
 	Confidence  float64
 	Reason      string
 	ReviewLevel ClassificationReviewLevel
+	Source      ClassificationSource
 }
 
 // ClassificationResponse は Claude 分類 API 呼び出し結果を表す。
 type ClassificationResponse struct {
 	Model   string
 	Results []ClassificationResult
+}
+
+// BlocklistKind はブロックリストの登録単位を表す。
+type BlocklistKind string
+
+const (
+	BlocklistKindSender BlocklistKind = "sender"
+	BlocklistKindDomain BlocklistKind = "domain"
+)
+
+// IsValid は既知のブロック種別かを判定する。
+func (k BlocklistKind) IsValid() bool {
+	switch k {
+	case BlocklistKindSender, BlocklistKindDomain:
+		return true
+	default:
+		return false
+	}
+}
+
+// BlocklistEntry はブロックリスト 1 件分を表す。
+type BlocklistEntry struct {
+	ID        int64
+	Kind      BlocklistKind
+	Pattern   string
+	Note      string
+	CreatedAt string
+	UpdatedAt string
+}
+
+// BlocklistSuggestion は修正履歴ベースの提案を表す。
+type BlocklistSuggestion struct {
+	Kind        BlocklistKind
+	Pattern     string
+	Count       int
+	LastSeenAt  string
+	Description string
+}
+
+// UpsertBlocklistEntryRequest はブロックリスト登録入力を表す。
+type UpsertBlocklistEntryRequest struct {
+	Kind    BlocklistKind
+	Pattern string
+	Note    string
+}
+
+// BlocklistOperationResult はブロックリスト操作の実行結果を表す。
+type BlocklistOperationResult struct {
+	Success bool
+	Message string
+}
+
+// ClassificationCorrection は分類修正履歴の登録入力を表す。
+type ClassificationCorrection struct {
+	MessageID         string
+	Sender            string
+	OriginalCategory  ClassificationCategory
+	CorrectedCategory ClassificationCategory
+}
+
+// NormalizeSenderAddress は送信者文字列から比較用メールアドレスを抽出する。
+func NormalizeSenderAddress(raw string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return ""
+	}
+
+	if parsed, err := mail.ParseAddress(trimmed); err == nil {
+		return strings.TrimSpace(strings.ToLower(parsed.Address))
+	}
+
+	if strings.Count(trimmed, "@") == 1 && !strings.Contains(trimmed, " ") {
+		return trimmed
+	}
+
+	if strings.Contains(trimmed, "<") && strings.Contains(trimmed, ">") {
+		start := strings.Index(trimmed, "<")
+		end := strings.LastIndex(trimmed, ">")
+		if start >= 0 && end > start+1 {
+			candidate := strings.TrimSpace(trimmed[start+1 : end])
+			if strings.Count(candidate, "@") == 1 && !strings.Contains(candidate, " ") {
+				return candidate
+			}
+		}
+	}
+
+	return ""
+}
+
+// SenderDomain は送信者からドメイン部を抽出する。
+func SenderDomain(sender string) string {
+	address := NormalizeSenderAddress(sender)
+	at := strings.LastIndex(address, "@")
+	if at < 0 || at+1 >= len(address) {
+		return ""
+	}
+	return address[at+1:]
 }
 
 // ActionKind は Gmail に対する実行種別を表す。

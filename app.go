@@ -21,6 +21,8 @@ const (
 	gmailConnectionTimeout      = 15 * time.Second
 	gmailActionTimeout          = 45 * time.Second
 	claudeClassificationTimeout = 45 * time.Second
+	dbOperationTimeout          = 10 * time.Second
+	blocklistSuggestionMinimum  = 3
 )
 
 type App struct {
@@ -360,6 +362,17 @@ func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.Classif
 	baseContext, cancel := context.WithTimeout(a.baseContext(), claudeClassificationTimeout)
 	defer cancel()
 
+	unblockedMessages, skippedResults, err := a.classifyByBlocklist(baseContext, request.Messages)
+	if err != nil {
+		return types.ClassificationResponse{}, err
+	}
+	if len(unblockedMessages) == 0 && len(skippedResults) > 0 {
+		return types.ClassificationResponse{
+			Model:   "blocklist-skip",
+			Results: skippedResults,
+		}, nil
+	}
+
 	apiKey, err := a.secretManager.LoadClaudeAPIKey(baseContext)
 	if err != nil {
 		return types.ClassificationResponse{}, fmt.Errorf("保存済み Claude API キーを読み出せませんでした: %w", err)
@@ -370,7 +383,141 @@ func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.Classif
 		client = claude.NewClient(claude.Options{})
 	}
 
-	return client.Classify(baseContext, apiKey, request)
+	response, err := client.Classify(baseContext, apiKey, types.ClassificationRequest{
+		Model:    request.Model,
+		Messages: unblockedMessages,
+	})
+	if err != nil {
+		return types.ClassificationResponse{}, err
+	}
+
+	for index := range response.Results {
+		if !response.Results[index].Source.IsValid() {
+			response.Results[index].Source = types.ClassificationSourceClaude
+		}
+	}
+
+	response.Results = mergeClassificationResults(
+		request.Messages,
+		response.Results,
+		skippedResults,
+	)
+
+	return response, nil
+}
+
+// GetBlocklistEntries は登録済みブロックリストを返す。
+func (a *App) GetBlocklistEntries() ([]types.BlocklistEntry, error) {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	return store.ListBlocklistEntries(ctx)
+}
+
+// UpsertBlocklistEntry は sender/domain ブロックを追加または更新する。
+func (a *App) UpsertBlocklistEntry(request types.UpsertBlocklistEntryRequest) types.BlocklistOperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: err.Error(),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	entry, err := store.UpsertBlocklistEntry(ctx, request.Kind, request.Pattern, request.Note)
+	if err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: fmt.Sprintf("ブロックリスト保存に失敗しました: %v", err),
+		}
+	}
+
+	return types.BlocklistOperationResult{
+		Success: true,
+		Message: fmt.Sprintf("ブロックリストを保存しました (%s: %s)", entry.Kind, entry.Pattern),
+	}
+}
+
+// DeleteBlocklistEntry は ID 指定でブロックリストを削除する。
+func (a *App) DeleteBlocklistEntry(id int64) types.BlocklistOperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: err.Error(),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	deleted, err := store.DeleteBlocklistEntry(ctx, id)
+	if err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: fmt.Sprintf("ブロックリスト削除に失敗しました: %v", err),
+		}
+	}
+	if !deleted {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: "対象のブロックリストが見つかりませんでした。",
+		}
+	}
+
+	return types.BlocklistOperationResult{
+		Success: true,
+		Message: "ブロックリストを削除しました。",
+	}
+}
+
+// RecordClassificationCorrection は分類修正履歴を保存する。
+func (a *App) RecordClassificationCorrection(
+	correction types.ClassificationCorrection,
+) types.BlocklistOperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: err.Error(),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if err := store.RecordClassificationCorrection(ctx, correction); err != nil {
+		return types.BlocklistOperationResult{
+			Success: false,
+			Message: fmt.Sprintf("分類修正履歴を保存できませんでした: %v", err),
+		}
+	}
+
+	return types.BlocklistOperationResult{
+		Success: true,
+		Message: "分類修正履歴を保存しました。",
+	}
+}
+
+// GetBlocklistSuggestions は修正履歴からブロック候補を返す。
+func (a *App) GetBlocklistSuggestions() ([]types.BlocklistSuggestion, error) {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	return store.ListBlocklistSuggestions(ctx, blocklistSuggestionMinimum)
 }
 
 // CancelGoogleLogin は進行中の Google ログインを中断する。
@@ -620,6 +767,137 @@ func (a *App) closeDatabase() error {
 	}
 
 	return store.Close()
+}
+
+func (a *App) requireDBStore() (*db.Store, error) {
+	a.mu.RLock()
+	store := a.dbStore
+	ready := a.databaseReady
+	a.mu.RUnlock()
+
+	if !ready || store == nil {
+		return nil, errors.New("SQLite が初期化されていないためブロックリスト操作を実行できません")
+	}
+
+	return store, nil
+}
+
+func (a *App) classifyByBlocklist(
+	ctx context.Context,
+	messages []types.EmailSummary,
+) ([]types.EmailSummary, []types.ClassificationResult, error) {
+	store, err := a.requireDBStore()
+	if err != nil {
+		// DB 未初期化時は従来どおり全件を Claude 分類対象にする。
+		return messages, nil, nil
+	}
+
+	entries, err := store.ListBlocklistEntries(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ブロックリスト取得に失敗しました: %w", err)
+	}
+	if len(entries) == 0 {
+		return messages, nil, nil
+	}
+
+	senderSet := make(map[string]struct{})
+	domainSet := make(map[string]struct{})
+	for _, entry := range entries {
+		switch entry.Kind {
+		case types.BlocklistKindSender:
+			if normalized := types.NormalizeSenderAddress(entry.Pattern); normalized != "" {
+				senderSet[normalized] = struct{}{}
+			}
+		case types.BlocklistKindDomain:
+			if normalized := normalizeDomain(entry.Pattern); normalized != "" {
+				domainSet[normalized] = struct{}{}
+			}
+		}
+	}
+
+	unblocked := make([]types.EmailSummary, 0, len(messages))
+	skipped := make([]types.ClassificationResult, 0)
+	for _, message := range messages {
+		sender, domain := senderIdentity(message.From)
+		if sender == "" && domain == "" {
+			unblocked = append(unblocked, message)
+			continue
+		}
+
+		if _, found := senderSet[sender]; found {
+			skipped = append(skipped, blocklistClassificationResult(message.ID, "sender", sender))
+			continue
+		}
+		if _, found := domainSet[domain]; found {
+			skipped = append(skipped, blocklistClassificationResult(message.ID, "domain", domain))
+			continue
+		}
+
+		unblocked = append(unblocked, message)
+	}
+
+	return unblocked, skipped, nil
+}
+
+func mergeClassificationResults(
+	messages []types.EmailSummary,
+	claudeResults []types.ClassificationResult,
+	blocklistResults []types.ClassificationResult,
+) []types.ClassificationResult {
+	byID := make(map[string]types.ClassificationResult, len(claudeResults)+len(blocklistResults))
+	for _, result := range claudeResults {
+		byID[result.MessageID] = result
+	}
+	for _, result := range blocklistResults {
+		byID[result.MessageID] = result
+	}
+
+	merged := make([]types.ClassificationResult, 0, len(byID))
+	for _, message := range messages {
+		result, ok := byID[message.ID]
+		if !ok {
+			continue
+		}
+		merged = append(merged, result)
+	}
+
+	return merged
+}
+
+func blocklistClassificationResult(
+	messageID string,
+	reasonType string,
+	reasonValue string,
+) types.ClassificationResult {
+	return types.ClassificationResult{
+		MessageID:   messageID,
+		Category:    types.ClassificationCategoryJunk,
+		Confidence:  1,
+		Reason:      fmt.Sprintf("ブロックリスト一致 (%s: %s) のため Claude 分析をスキップしました。", reasonType, reasonValue),
+		ReviewLevel: types.ClassificationReviewLevelAutoApply,
+		Source:      types.ClassificationSourceBlocklist,
+	}
+}
+
+func senderIdentity(raw string) (sender string, domain string) {
+	sender = types.NormalizeSenderAddress(raw)
+	domain = types.SenderDomain(sender)
+	return sender, domain
+}
+
+func normalizeDomain(raw string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.TrimPrefix(trimmed, "@")
+	if at := strings.LastIndex(trimmed, "@"); at >= 0 {
+		trimmed = trimmed[at+1:]
+	}
+	if strings.Contains(trimmed, " ") {
+		return ""
+	}
+	return trimmed
 }
 
 func (a *App) initialAuthStatus() string {

@@ -105,3 +105,54 @@ func TestActionKindValues(t *testing.T) {
 		})
 	}
 }
+
+func TestClassificationSourceIsValid(t *testing.T) {
+	t.Parallel()
+
+	if !ClassificationSourceClaude.IsValid() {
+		t.Fatalf("ClassificationSourceClaude.IsValid() = false, want true")
+	}
+	if !ClassificationSourceBlocklist.IsValid() {
+		t.Fatalf("ClassificationSourceBlocklist.IsValid() = false, want true")
+	}
+	if ClassificationSource("unknown").IsValid() {
+		t.Fatalf("ClassificationSource(\"unknown\").IsValid() = true, want false")
+	}
+}
+
+func TestBlocklistKindValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		got  BlocklistKind
+		want BlocklistKind
+	}{
+		{name: "sender", got: BlocklistKindSender, want: "sender"},
+		{name: "domain", got: BlocklistKindDomain, want: "domain"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.got != tt.want {
+				t.Fatalf("unexpected blocklist kind value: got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBlocklistKindIsValid(t *testing.T) {
+	t.Parallel()
+
+	if !BlocklistKindSender.IsValid() {
+		t.Fatalf("BlocklistKindSender.IsValid() = false, want true")
+	}
+	if !BlocklistKindDomain.IsValid() {
+		t.Fatalf("BlocklistKindDomain.IsValid() = false, want true")
+	}
+	if BlocklistKind("unknown").IsValid() {
+		t.Fatalf("BlocklistKind(\"unknown\").IsValid() = true, want false")
+	}
+}
