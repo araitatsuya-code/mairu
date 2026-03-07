@@ -19,6 +19,7 @@ import (
 
 const (
 	gmailConnectionTimeout      = 15 * time.Second
+	gmailActionTimeout          = 45 * time.Second
 	claudeClassificationTimeout = 45 * time.Second
 )
 
@@ -307,6 +308,53 @@ func (a *App) CheckGmailConnection() types.GmailConnectionResult {
 	}
 }
 
+// ExecuteGmailActions は承認済み分類結果を Gmail 側へ反映する。
+func (a *App) ExecuteGmailActions(
+	request types.ExecuteGmailActionsRequest,
+) (types.ExecuteGmailActionsResult, error) {
+	if !request.Confirmed {
+		return types.ExecuteGmailActionsResult{
+			Success: false,
+			Message: "Gmail アクション実行前に確認ステップを完了してください。",
+		}, nil
+	}
+	if len(request.Decisions) == 0 {
+		return types.ExecuteGmailActionsResult{
+			Success: false,
+			Message: "実行対象のメールが選択されていません。",
+		}, nil
+	}
+
+	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
+	defer cancel()
+
+	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	if err != nil {
+		return types.ExecuteGmailActionsResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
+	if err != nil {
+		return types.ExecuteGmailActionsResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
+			return types.ExecuteGmailActionsResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	result, err := a.gmailClient.ExecuteActions(baseContext, token.AccessToken, request.Decisions)
+	if err != nil {
+		return types.ExecuteGmailActionsResult{}, err
+	}
+
+	result.TokenRefreshed = refreshed
+	account := a.currentGmailAccount()
+	a.setGmailConnectionState(true, result.Message, account)
+
+	return result, nil
+}
+
 // ClassifyEmails は保存済み Claude API キーでメール分類を実行する。
 func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.ClassificationResponse, error) {
 	baseContext, cancel := context.WithTimeout(a.baseContext(), claudeClassificationTimeout)
@@ -412,6 +460,13 @@ func (a *App) hasLoginInProgress() bool {
 	running := a.loginCancel != nil
 	a.mu.RUnlock()
 	return running
+}
+
+func (a *App) currentGmailAccount() string {
+	a.mu.RLock()
+	account := a.gmailAccount
+	a.mu.RUnlock()
+	return account
 }
 
 func (a *App) setLoginCancelIfIdle(cancel context.CancelFunc) (uint64, bool) {

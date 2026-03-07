@@ -79,6 +79,38 @@ export type GmailConnectionResult = {
     tokenRefreshed: boolean;
 };
 
+export type GmailActionDecision = {
+    messageID: string;
+    category: ClassificationCategory;
+    reviewLevel: ClassificationReviewLevel;
+};
+
+export type ExecuteGmailActionsRequest = {
+    confirmed: boolean;
+    decisions: GmailActionDecision[];
+};
+
+export type GmailActionFailure = {
+    messageID: string;
+    action: 'label' | 'archive' | 'delete' | 'mark_read';
+    error: string;
+};
+
+export type ExecuteGmailActionsResult = {
+    success: boolean;
+    message: string;
+    processedCount: number;
+    successCount: number;
+    failureCount: number;
+    deletedCount: number;
+    archivedCount: number;
+    markedReadCount: number;
+    labeledCount: number;
+    createdLabels: string[];
+    failures: GmailActionFailure[];
+    tokenRefreshed: boolean;
+};
+
 type WailsAppApi = {
     AppName?: () => Promise<string> | string;
     GetRuntimeStatus?: () =>
@@ -198,6 +230,50 @@ type WailsAppApi = {
               MessagesTotal?: number;
               ThreadsTotal?: number;
               HistoryID?: string;
+              TokenRefreshed?: boolean;
+          };
+    ExecuteGmailActions?: (request: {
+        Confirmed: boolean;
+        Decisions: Array<{
+            MessageID: string;
+            Category: ClassificationCategory;
+            ReviewLevel: ClassificationReviewLevel;
+        }>;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+              ProcessedCount?: number;
+              SuccessCount?: number;
+              FailureCount?: number;
+              DeletedCount?: number;
+              ArchivedCount?: number;
+              MarkedReadCount?: number;
+              LabeledCount?: number;
+              CreatedLabels?: string[];
+              Failures?: Array<{
+                  MessageID: string;
+                  Action: 'label' | 'archive' | 'delete' | 'mark_read';
+                  Error: string;
+              }>;
+              TokenRefreshed?: boolean;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+              ProcessedCount?: number;
+              SuccessCount?: number;
+              FailureCount?: number;
+              DeletedCount?: number;
+              ArchivedCount?: number;
+              MarkedReadCount?: number;
+              LabeledCount?: number;
+              CreatedLabels?: string[];
+              Failures?: Array<{
+                  MessageID: string;
+                  Action: 'label' | 'archive' | 'delete' | 'mark_read';
+                  Error: string;
+              }>;
               TokenRefreshed?: boolean;
           };
 };
@@ -375,6 +451,44 @@ export async function checkGmailConnection(): Promise<GmailConnectionResult> {
         messagesTotal: raw.MessagesTotal ?? 0,
         threadsTotal: raw.ThreadsTotal ?? 0,
         historyID: raw.HistoryID ?? '',
+        tokenRefreshed: raw.TokenRefreshed ?? false,
+    };
+}
+
+export async function executeGmailActions(
+    request: ExecuteGmailActionsRequest,
+): Promise<ExecuteGmailActionsResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.ExecuteGmailActions?.({
+        Confirmed: request.confirmed,
+        Decisions: request.decisions.map((item) => ({
+            MessageID: item.messageID,
+            Category: item.category,
+            ReviewLevel: item.reviewLevel,
+        })),
+    });
+
+    if (!result) {
+        throw new Error('Gmail アクション実行 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+        processedCount: raw.ProcessedCount ?? 0,
+        successCount: raw.SuccessCount ?? 0,
+        failureCount: raw.FailureCount ?? 0,
+        deletedCount: raw.DeletedCount ?? 0,
+        archivedCount: raw.ArchivedCount ?? 0,
+        markedReadCount: raw.MarkedReadCount ?? 0,
+        labeledCount: raw.LabeledCount ?? 0,
+        createdLabels: raw.CreatedLabels ?? [],
+        failures: (raw.Failures ?? []).map((failure) => ({
+            messageID: failure.MessageID,
+            action: failure.Action,
+            error: failure.Error,
+        })),
         tokenRefreshed: raw.TokenRefreshed ?? false,
     };
 }

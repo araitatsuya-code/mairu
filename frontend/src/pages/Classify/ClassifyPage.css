@@ -62,6 +62,7 @@
 }
 
 .classify-controls,
+.classify-actions,
 .classify-results {
     padding: 20px;
     border-radius: 20px;
@@ -177,6 +178,67 @@
     margin: 10px 0 0;
     font-size: 1.6rem;
     font-weight: 700;
+}
+
+.classify-actions-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.classify-actions-header h2 {
+    margin: 0;
+    font-size: 1.15rem;
+}
+
+.classify-actions-header p {
+    margin: 8px 0 0;
+    color: #cbd5e1;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.classify-action-result {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(2, 6, 23, 0.3);
+}
+
+.classify-action-stats {
+    margin: 8px 0 0;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+.classify-action-stats div {
+    display: grid;
+    gap: 2px;
+}
+
+.classify-action-stats dt {
+    color: #94a3b8;
+    font-size: 0.74rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.classify-action-stats dd {
+    margin: 0;
+    color: #f8fafc;
+    font-weight: 700;
+}
+
+.classify-failure-list {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    color: #fecaca;
+    line-height: 1.6;
+    font-size: 0.86rem;
 }
 
 .classify-results-header {
@@ -382,6 +444,7 @@
 @media (max-width: 640px) {
     .classify-hero,
     .classify-controls,
+    .classify-actions,
     .classify-results {
         padding: 16px;
     }
