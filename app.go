@@ -367,7 +367,7 @@ func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.Classif
 	if err != nil {
 		return types.ClassificationResponse{}, err
 	}
-	if len(unblockedMessages) == 0 {
+	if len(unblockedMessages) == 0 && len(skippedResults) > 0 {
 		return types.ClassificationResponse{
 			Model:   "blocklist-skip",
 			Results: skippedResults,

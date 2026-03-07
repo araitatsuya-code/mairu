@@ -216,6 +216,15 @@ func TestBlocklistSuggestionsFromCorrections(t *testing.T) {
 			t.Fatalf("RecordClassificationCorrection domain returned error: %v", err)
 		}
 	}
+	err = store.RecordClassificationCorrection(ctx, types.ClassificationCorrection{
+		MessageID:         "m-domain-2",
+		Sender:            "offers@bulk.example.net",
+		OriginalCategory:  types.ClassificationCategoryArchive,
+		CorrectedCategory: types.ClassificationCategoryJunk,
+	})
+	if err != nil {
+		t.Fatalf("RecordClassificationCorrection second domain sender returned error: %v", err)
+	}
 
 	// 既に sender が登録済みの場合は提案から除外されること。
 	if _, err := store.UpsertBlocklistEntry(ctx, types.BlocklistKindSender, "promo@example.com", "already"); err != nil {
@@ -234,12 +243,52 @@ func TestBlocklistSuggestionsFromCorrections(t *testing.T) {
 		}
 		if suggestion.Kind == types.BlocklistKindDomain && suggestion.Pattern == "bulk.example.net" {
 			foundDomain = true
-			if suggestion.Count != 3 {
-				t.Fatalf("bulk.example.net Count = %d, want 3", suggestion.Count)
+			if suggestion.Count != 4 {
+				t.Fatalf("bulk.example.net Count = %d, want 4", suggestion.Count)
 			}
 		}
 	}
 	if !foundDomain {
 		t.Fatalf("bulk.example.net domain suggestion was not found: %+v", suggestions)
+	}
+}
+
+func TestBlocklistSuggestionsDomainRequiresMultipleSenders(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mairu.db")
+
+	store, err := Open(ctx, OpenOptions{Path: path})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	for i := 0; i < 4; i++ {
+		err := store.RecordClassificationCorrection(ctx, types.ClassificationCorrection{
+			MessageID:         "m-single-domain",
+			Sender:            "single@domain-only.example",
+			OriginalCategory:  types.ClassificationCategoryArchive,
+			CorrectedCategory: types.ClassificationCategoryJunk,
+		})
+		if err != nil {
+			t.Fatalf("RecordClassificationCorrection returned error: %v", err)
+		}
+	}
+
+	suggestions, err := store.ListBlocklistSuggestions(ctx, 3)
+	if err != nil {
+		t.Fatalf("ListBlocklistSuggestions returned error: %v", err)
+	}
+
+	for _, suggestion := range suggestions {
+		if suggestion.Kind == types.BlocklistKindDomain && suggestion.Pattern == "domain-only.example" {
+			t.Fatalf("single-sender domain must not be suggested: %+v", suggestion)
+		}
 	}
 }

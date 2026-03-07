@@ -250,6 +250,31 @@ func TestClassifyEmailsUsesStoredClaudeAPIKey(t *testing.T) {
 	}
 }
 
+func TestClassifyEmailsRejectsEmptyMessages(t *testing.T) {
+	t.Parallel()
+
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveClaudeAPIKey(context.Background(), "claude-secret"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	app := &App{
+		secretManager: manager,
+		claudeClient:  claude.NewClient(claude.Options{}),
+	}
+
+	_, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: nil,
+	})
+	if err == nil {
+		t.Fatalf("ClassifyEmails returned nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "分類対象のメールがありません") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestClassifyEmailsSkipsBlockedSenderWithoutClaudeKey(t *testing.T) {
 	t.Parallel()
 

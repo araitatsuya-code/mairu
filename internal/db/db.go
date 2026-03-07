@@ -457,7 +457,11 @@ func (s *Store) ListBlocklistSuggestions(
 
 	domainRows, err := s.db.QueryContext(
 		ctx,
-		`SELECT c.sender_domain, COUNT(*) AS hit_count, MAX(c.created_at) AS last_seen_at
+		`SELECT
+			c.sender_domain,
+			COUNT(*) AS hit_count,
+			COUNT(DISTINCT c.sender_email) AS unique_sender_count,
+			MAX(c.created_at) AS last_seen_at
 		FROM classification_corrections c
 		WHERE c.corrected_category = ?
 			AND c.sender_domain <> ''
@@ -467,7 +471,7 @@ func (s *Store) ListBlocklistSuggestions(
 				WHERE b.kind = ? AND b.pattern = c.sender_domain
 			)
 		GROUP BY c.sender_domain
-		HAVING hit_count >= ?
+		HAVING hit_count >= ? AND unique_sender_count >= 2
 		ORDER BY hit_count DESC, last_seen_at DESC`,
 		types.ClassificationCategoryJunk,
 		types.BlocklistKindDomain,
@@ -481,8 +485,9 @@ func (s *Store) ListBlocklistSuggestions(
 	for domainRows.Next() {
 		var pattern string
 		var count int
+		var uniqueSenders int
 		var lastSeenAt string
-		if err := domainRows.Scan(&pattern, &count, &lastSeenAt); err != nil {
+		if err := domainRows.Scan(&pattern, &count, &uniqueSenders, &lastSeenAt); err != nil {
 			return nil, fmt.Errorf("ドメイン提案を読み取れませんでした: %w", err)
 		}
 		suggestions = append(suggestions, types.BlocklistSuggestion{
@@ -490,7 +495,7 @@ func (s *Store) ListBlocklistSuggestions(
 			Pattern:     pattern,
 			Count:       count,
 			LastSeenAt:  lastSeenAt,
-			Description: fmt.Sprintf("同一ドメインを junk へ %d 回修正", count),
+			Description: fmt.Sprintf("同一ドメインを junk へ %d 回修正 (%d 送信者)", count, uniqueSenders),
 		})
 	}
 	if err := domainRows.Err(); err != nil {
