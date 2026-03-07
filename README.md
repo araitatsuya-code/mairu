@@ -12,7 +12,11 @@ Wails（Go + React）で構築するGmail整理デスクトップアプリです
 - ✅ `MAIRU-002 / #2` を完了し、`internal/` の Go パッケージ骨組みと共有 DTO を追加済み。
 - ✅ `MAIRU-003 / #3` を完了し、Settings 画面の雛形と起動時初期化の入口を追加済み。
 - ✅ `MAIRU-004 / #4` を完了し、Google OAuth PKCE の認可コード受信まで確認済み。
-- ✅ `MAIRU-010 / #10` が着手可能。
+- ✅ `MAIRU-005 / #5` を完了し、OAuth トークン / Claude API キーのキーチェーン保存を実装済み。
+- ✅ `MAIRU-006 / #6` を完了し、保存済みトークンで Gmail API 接続確認を実装済み。
+- ✅ `MAIRU-007 / #7` を完了し、Claude API クライアントと分類 DTO を実装済み。
+- ✅ `MAIRU-008 / #8` を完了し、分類確認画面と信頼度分岐 UI を実装済み。
+- ✅ `MAIRU-010 / #10` を完了し、SQLite 初期化とマイグレーション基盤を実装済み。
 
 ## 必要環境（開発開始時）
 - Go 1.22+
@@ -55,7 +59,7 @@ mairu/
 macOS では `UniformTypeIdentifiers` のリンク設定を `Makefile` 側で補っています。
 
 ## 次のアクション
-1. `MAIRU-005 / #5` に進み、OAuth トークンと API キーをキーチェーンへ保存する。
-2. `MAIRU-010 / #10` に進み、SQLite 初期化とスキーマの土台を作る。
+1. `MAIRU-009 / #9` に進み、承認済み分類結果を Gmail アクション（ラベル適用、アーカイブ、削除など）へ接続する。
+2. `MAIRU-011 / #11` の着手準備として、`MAIRU-009` 完了後にブロックリスト管理の依存を解消する。
 
 Codexとの協調作業手順などは [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) を参照してください。
