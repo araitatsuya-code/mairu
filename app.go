@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/mail"
 	"os"
 	"strings"
 	"sync"
@@ -393,7 +392,7 @@ func (a *App) ClassifyEmails(request types.ClassificationRequest) (types.Classif
 	}
 
 	for index := range response.Results {
-		if response.Results[index].Source == "" {
+		if !response.Results[index].Source.IsValid() {
 			response.Results[index].Source = types.ClassificationSourceClaude
 		}
 	}
@@ -806,7 +805,7 @@ func (a *App) classifyByBlocklist(
 	for _, entry := range entries {
 		switch entry.Kind {
 		case types.BlocklistKindSender:
-			if normalized := normalizeSenderAddress(entry.Pattern); normalized != "" {
+			if normalized := types.NormalizeSenderAddress(entry.Pattern); normalized != "" {
 				senderSet[normalized] = struct{}{}
 			}
 		case types.BlocklistKindDomain:
@@ -881,37 +880,9 @@ func blocklistClassificationResult(
 }
 
 func senderIdentity(raw string) (sender string, domain string) {
-	sender = normalizeSenderAddress(raw)
-	domain = senderDomain(sender)
+	sender = types.NormalizeSenderAddress(raw)
+	domain = types.SenderDomain(sender)
 	return sender, domain
-}
-
-func normalizeSenderAddress(raw string) string {
-	trimmed := strings.TrimSpace(strings.ToLower(raw))
-	if trimmed == "" {
-		return ""
-	}
-
-	if parsed, err := mail.ParseAddress(trimmed); err == nil {
-		return strings.TrimSpace(strings.ToLower(parsed.Address))
-	}
-
-	if strings.Count(trimmed, "@") == 1 && !strings.Contains(trimmed, " ") {
-		return trimmed
-	}
-
-	if strings.Contains(trimmed, "<") && strings.Contains(trimmed, ">") {
-		start := strings.Index(trimmed, "<")
-		end := strings.LastIndex(trimmed, ">")
-		if start >= 0 && end > start+1 {
-			candidate := strings.TrimSpace(trimmed[start+1 : end])
-			if strings.Count(candidate, "@") == 1 && !strings.Contains(candidate, " ") {
-				return candidate
-			}
-		}
-	}
-
-	return ""
 }
 
 func normalizeDomain(raw string) string {
@@ -927,15 +898,6 @@ func normalizeDomain(raw string) string {
 		return ""
 	}
 	return trimmed
-}
-
-func senderDomain(sender string) string {
-	address := normalizeSenderAddress(sender)
-	at := strings.LastIndex(address, "@")
-	if at < 0 || at+1 >= len(address) {
-		return ""
-	}
-	return address[at+1:]
 }
 
 func (a *App) initialAuthStatus() string {

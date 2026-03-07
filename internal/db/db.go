@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -366,11 +365,11 @@ func (s *Store) RecordClassificationCorrection(
 		return errors.New("corrected_category が不正です")
 	}
 
-	senderEmail := normalizeSenderAddress(correction.Sender)
+	senderEmail := types.NormalizeSenderAddress(correction.Sender)
 	if senderEmail == "" {
 		return errors.New("sender は有効なメールアドレスを含めてください")
 	}
-	senderDomain := senderDomain(senderEmail)
+	senderDomain := types.SenderDomain(senderEmail)
 	if senderDomain == "" {
 		return errors.New("sender からドメインを抽出できませんでした")
 	}
@@ -668,7 +667,7 @@ func normalizeBlockPattern(kind types.BlocklistKind, pattern string) (string, er
 
 	switch kind {
 	case types.BlocklistKindSender:
-		normalized = normalizeSenderAddress(normalized)
+		normalized = types.NormalizeSenderAddress(normalized)
 		if normalized == "" {
 			return "", errors.New("sender は有効なメールアドレスを含めてください")
 		}
@@ -686,41 +685,4 @@ func normalizeBlockPattern(kind types.BlocklistKind, pattern string) (string, er
 	default:
 		return "", errors.New("blocklist kind は sender か domain を指定してください")
 	}
-}
-
-func normalizeSenderAddress(value string) string {
-	trimmed := strings.TrimSpace(strings.ToLower(value))
-	if trimmed == "" {
-		return ""
-	}
-
-	if parsed, err := mail.ParseAddress(trimmed); err == nil {
-		return strings.TrimSpace(strings.ToLower(parsed.Address))
-	}
-
-	if strings.Contains(trimmed, "<") && strings.Contains(trimmed, ">") {
-		start := strings.Index(trimmed, "<")
-		end := strings.LastIndex(trimmed, ">")
-		if start >= 0 && end > start+1 {
-			candidate := strings.TrimSpace(trimmed[start+1 : end])
-			if strings.Contains(candidate, "@") && !strings.Contains(candidate, " ") {
-				return candidate
-			}
-		}
-	}
-
-	if strings.Count(trimmed, "@") == 1 && !strings.Contains(trimmed, " ") {
-		return trimmed
-	}
-
-	return ""
-}
-
-func senderDomain(email string) string {
-	address := normalizeSenderAddress(email)
-	at := strings.LastIndex(address, "@")
-	if at < 0 || at+1 >= len(address) {
-		return ""
-	}
-	return address[at+1:]
 }

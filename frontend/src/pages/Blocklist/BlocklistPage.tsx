@@ -51,6 +51,12 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
     const [error, setError] = useState<string | null>(null);
 
     async function refresh() {
+        if (!status.databaseReady) {
+            setEntries([]);
+            setSuggestions([]);
+            return;
+        }
+
         const [nextEntries, nextSuggestions] = await Promise.all([
             loadBlocklistEntries(),
             loadBlocklistSuggestions(),
@@ -65,6 +71,12 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
         async function initialize() {
             setLoading(true);
             setError(null);
+            if (!status.databaseReady) {
+                setEntries([]);
+                setSuggestions([]);
+                setLoading(false);
+                return;
+            }
             try {
                 const [nextEntries, nextSuggestions] = await Promise.all([
                     loadBlocklistEntries(),
@@ -92,7 +104,7 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [status.databaseReady]);
 
     async function handleSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -110,11 +122,11 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
                 pattern: pattern.trim(),
                 note: note.trim(),
             });
-            setMessage(result.message);
             if (!result.success) {
                 setError(result.message);
                 return;
             }
+            setMessage(result.message);
             setPattern('');
             setNote('');
             await refresh();
@@ -134,11 +146,11 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
         setMessage(null);
         try {
             const result = await deleteBlocklistEntry(id);
-            setMessage(result.message);
             if (!result.success) {
                 setError(result.message);
                 return;
             }
+            setMessage(result.message);
             await refresh();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : 'ブロックリスト削除に失敗しました。');
@@ -157,11 +169,11 @@ export function BlocklistPage({ status }: BlocklistPageProps) {
                 pattern: suggestion.pattern,
                 note: `修正履歴提案 (${suggestion.count} 回)`,
             });
-            setMessage(result.message);
             if (!result.success) {
                 setError(result.message);
                 return;
             }
+            setMessage(result.message);
             await refresh();
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : '提案の追加に失敗しました。');

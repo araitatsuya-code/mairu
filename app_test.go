@@ -329,6 +329,57 @@ func TestClassifyEmailsSkipsBlockedSenderWithoutClaudeKey(t *testing.T) {
 	}
 }
 
+func TestClassifyEmailsSkipsBlockedDomainWithoutClaudeKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if _, err := store.UpsertBlocklistEntry(ctx, types.BlocklistKindDomain, "example.com", "manual"); err != nil {
+		t.Fatalf("UpsertBlocklistEntry returned error: %v", err)
+	}
+
+	app := &App{
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ClassifyEmails(types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{
+				ID:      "msg-1",
+				From:    "noreply@example.com",
+				Subject: "promo",
+				Snippet: "sale",
+				Unread:  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ClassifyEmails returned error: %v", err)
+	}
+	if result.Model != "blocklist-skip" {
+		t.Fatalf("Model = %q, want %q", result.Model, "blocklist-skip")
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].Source != types.ClassificationSourceBlocklist {
+		t.Fatalf("Source = %q, want %q", result.Results[0].Source, types.ClassificationSourceBlocklist)
+	}
+}
+
 func TestClassifyEmailsCallsClaudeOnlyForUnblockedMessages(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"net/mail"
+	"strings"
+	"time"
+)
 
 // EmailSummary は Gmail と Claude の間で共通利用するメール概要 DTO。
 type EmailSummary struct {
@@ -61,6 +65,16 @@ const (
 	ClassificationSourceClaude    ClassificationSource = "claude"
 	ClassificationSourceBlocklist ClassificationSource = "blocklist"
 )
+
+// IsValid は既知の分類ソースかを判定する。
+func (s ClassificationSource) IsValid() bool {
+	switch s {
+	case ClassificationSourceClaude, ClassificationSourceBlocklist:
+		return true
+	default:
+		return false
+	}
+}
 
 // ReviewLevelForConfidence は信頼度から UI の分岐を決める。
 func ReviewLevelForConfidence(confidence float64) ClassificationReviewLevel {
@@ -154,6 +168,45 @@ type ClassificationCorrection struct {
 	Sender            string
 	OriginalCategory  ClassificationCategory
 	CorrectedCategory ClassificationCategory
+}
+
+// NormalizeSenderAddress は送信者文字列から比較用メールアドレスを抽出する。
+func NormalizeSenderAddress(raw string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return ""
+	}
+
+	if parsed, err := mail.ParseAddress(trimmed); err == nil {
+		return strings.TrimSpace(strings.ToLower(parsed.Address))
+	}
+
+	if strings.Count(trimmed, "@") == 1 && !strings.Contains(trimmed, " ") {
+		return trimmed
+	}
+
+	if strings.Contains(trimmed, "<") && strings.Contains(trimmed, ">") {
+		start := strings.Index(trimmed, "<")
+		end := strings.LastIndex(trimmed, ">")
+		if start >= 0 && end > start+1 {
+			candidate := strings.TrimSpace(trimmed[start+1 : end])
+			if strings.Count(candidate, "@") == 1 && !strings.Contains(candidate, " ") {
+				return candidate
+			}
+		}
+	}
+
+	return ""
+}
+
+// SenderDomain は送信者からドメイン部を抽出する。
+func SenderDomain(sender string) string {
+	address := NormalizeSenderAddress(sender)
+	at := strings.LastIndex(address, "@")
+	if at < 0 || at+1 >= len(address) {
+		return ""
+	}
+	return address[at+1:]
 }
 
 // ActionKind は Gmail に対する実行種別を表す。

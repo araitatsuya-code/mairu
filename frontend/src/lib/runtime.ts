@@ -615,7 +615,8 @@ export async function loadBlocklistEntries(): Promise<BlocklistEntry[]> {
     }
 
     const raw = await result;
-    return raw.map((item) => ({
+    const items = Array.isArray(raw) ? raw : [];
+    return items.map((item) => ({
         id: item.ID,
         kind: item.Kind,
         pattern: item.Pattern,
@@ -692,7 +693,8 @@ export async function loadBlocklistSuggestions(): Promise<BlocklistSuggestion[]>
     }
 
     const raw = await result;
-    return raw.map((item) => ({
+    const items = Array.isArray(raw) ? raw : [];
+    return items.map((item) => ({
         kind: item.Kind,
         pattern: item.Pattern,
         count: item.Count,
