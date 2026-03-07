@@ -9,6 +9,7 @@ import {
     type ClassificationReviewLevel,
     type EmailSummary,
     executeGmailActions,
+    recordClassificationRun,
     recordClassificationCorrection,
     type ExecuteGmailActionsResult,
     type RuntimeStatus,
@@ -244,6 +245,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     const [correctionError, setCorrectionError] = useState<string | null>(null);
     const [correctionPendingByID, setCorrectionPendingByID] = useState<Record<string, boolean>>({});
     const [lastActionResult, setLastActionResult] = useState<ExecuteGmailActionsResult | null>(null);
+    const [loggingMessage, setLoggingMessage] = useState<string | null>(null);
     const [lastClassifiedAt, setLastClassifiedAt] = useState<string | null>(
         new Date().toISOString(),
     );
@@ -310,26 +312,57 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         setCorrectionPendingByID({});
     }
 
-    function handleGenerateSample() {
-        const generated = buildSampleMessages(sampleMessageCount);
-        setMessages(generated);
-        setResults(buildMockResults(generated));
-        setError(null);
-        setActionError(null);
-        setLastActionResult(null);
-        setLastClassifiedAt(new Date().toISOString());
-        resetApprovalSelection();
-        resetCorrections();
+    async function persistClassificationLogs(
+        nextMessages: EmailSummary[],
+        nextResults: ClassificationResponse['results'],
+    ) {
+        if (!status.databaseReady) {
+            setLoggingMessage('SQLite 未初期化のため分類ログ保存はスキップしました。');
+            return;
+        }
+
+        const result = await recordClassificationRun({
+            messages: nextMessages,
+            results: nextResults,
+        });
+        if (!result.success) {
+            throw new Error(result.message);
+        }
+        setLoggingMessage(result.message);
     }
 
-    function handleShowMockResults() {
-        setResults(buildMockResults(messages));
+    async function handleGenerateSample() {
+        const generated = buildSampleMessages(sampleMessageCount);
+        const nextResults = buildMockResults(generated);
+        setMessages(generated);
+        setResults(nextResults);
         setError(null);
         setActionError(null);
         setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
         resetCorrections();
+        try {
+            await persistClassificationLogs(generated, nextResults);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : '分類ログ保存に失敗しました。');
+        }
+    }
+
+    async function handleShowMockResults() {
+        const nextResults = buildMockResults(messages);
+        setResults(nextResults);
+        setError(null);
+        setActionError(null);
+        setLastActionResult(null);
+        setLastClassifiedAt(new Date().toISOString());
+        resetApprovalSelection();
+        resetCorrections();
+        try {
+            await persistClassificationLogs(messages, nextResults);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : '分類ログ保存に失敗しました。');
+        }
     }
 
     async function handleClassifyWithClaude() {
@@ -352,6 +385,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             setLastActionResult(null);
             resetApprovalSelection();
             resetCorrections();
+            await persistClassificationLogs(messages, response.results);
         } catch (cause) {
             const message =
                 cause instanceof Error
@@ -449,6 +483,18 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             const result = await executeGmailActions({
                 confirmed: true,
                 decisions: selectedDecisions,
+                metadata: rows
+                    .filter((row) => selectedForApproval[row.result.messageID])
+                    .map((row) => ({
+                        messageID: row.result.messageID,
+                        threadID: row.message?.threadID ?? '',
+                        from: row.message?.from ?? '',
+                        subject: row.message?.subject ?? '',
+                        category: correctedCategories[row.result.messageID] ?? row.result.category,
+                        confidence: row.result.confidence,
+                        reviewLevel: row.result.reviewLevel,
+                        source: row.result.source,
+                    })),
             });
             setLastActionResult(result);
             resetApprovalSelection();
@@ -503,7 +549,9 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                     <button
                         type="button"
                         className="classify-secondary-button"
-                        onClick={handleGenerateSample}
+                        onClick={() => {
+                            void handleGenerateSample();
+                        }}
                         disabled={pending}
                     >
                         50 件サンプルを再生成
@@ -511,7 +559,9 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                     <button
                         type="button"
                         className="classify-secondary-button"
-                        onClick={handleShowMockResults}
+                        onClick={() => {
+                            void handleShowMockResults();
+                        }}
                         disabled={pending}
                     >
                         モック分類を表示
@@ -536,6 +586,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                     </p>
                 ) : null}
                 {error ? <p className="classify-error-note">{error}</p> : null}
+                {loggingMessage ? <p className="classify-inline-note">{loggingMessage}</p> : null}
             </section>
 
             <section className="classify-summary" aria-label="信頼度分岐サマリー">

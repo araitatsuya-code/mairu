@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"mairu/internal/auth"
 	"mairu/internal/claude"
 	"mairu/internal/db"
+	"mairu/internal/exporter"
 	"mairu/internal/gmail"
 	"mairu/internal/types"
 )
@@ -23,6 +27,7 @@ const (
 	claudeClassificationTimeout = 45 * time.Second
 	dbOperationTimeout          = 10 * time.Second
 	blocklistSuggestionMinimum  = 3
+	defaultExportDirName        = "Downloads"
 )
 
 type App struct {
@@ -350,6 +355,23 @@ func (a *App) ExecuteGmailActions(
 		return types.ExecuteGmailActionsResult{}, err
 	}
 
+	store, dbErr := a.requireDBStore()
+	if dbErr == nil {
+		logEntries, buildErr := buildActionLogEntries(request, result)
+		if buildErr != nil {
+			log.Printf("処理ログ生成に失敗しました: %v", buildErr)
+			result.Message = result.Message + " 処理ログ保存はスキップされました。"
+		} else if len(logEntries) > 0 {
+			logContext, logCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+			defer logCancel()
+
+			if err := store.RecordActionLogEntries(logContext, logEntries); err != nil {
+				log.Printf("処理ログ保存に失敗しました: %v", err)
+				result.Message = result.Message + " 処理ログ保存に失敗しました。"
+			}
+		}
+	}
+
 	result.TokenRefreshed = refreshed
 	account := a.currentGmailAccount()
 	a.setGmailConnectionState(true, result.Message, account)
@@ -505,6 +527,205 @@ func (a *App) RecordClassificationCorrection(
 		Success: true,
 		Message: "分類修正履歴を保存しました。",
 	}
+}
+
+// RecordClassificationRun は分類結果をエクスポート用ログへ保存する。
+func (a *App) RecordClassificationRun(request types.RecordClassificationRunRequest) types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: err.Error(),
+		}
+	}
+
+	entries, err := buildClassificationLogEntries(request)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("分類ログの整形に失敗しました: %v", err),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if err := store.RecordClassificationLogEntries(ctx, entries); err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("分類ログを保存できませんでした: %v", err),
+		}
+	}
+
+	return types.OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("分類ログを %d 件保存しました。", len(entries)),
+	}
+}
+
+// ExportProcessedMailCSV は処理済みメールログを CSV へ出力する。
+func (a *App) ExportProcessedMailCSV() types.OperationResult {
+	return a.exportActionLogs(
+		"処理済みメール一覧 (CSV) を保存",
+		"mairu-processed-mails",
+		".csv",
+		[]runtime.FileFilter{{DisplayName: "CSV ファイル", Pattern: "*.csv"}},
+		func(entries []types.ActionLogEntry, exportedAt time.Time) ([]byte, error) {
+			return exporter.MarshalProcessedMailCSV(entries)
+		},
+	)
+}
+
+// ExportProcessedMailJSON は処理済みメールログを JSON へ出力する。
+func (a *App) ExportProcessedMailJSON() types.OperationResult {
+	return a.exportActionLogs(
+		"処理済みメール一覧 (JSON) を保存",
+		"mairu-processed-mails",
+		".json",
+		[]runtime.FileFilter{{DisplayName: "JSON ファイル", Pattern: "*.json"}},
+		exporter.MarshalProcessedMailJSON,
+	)
+}
+
+// ExportBlocklistJSON は blocklist を JSON へ出力する。
+func (a *App) ExportBlocklistJSON() types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{Success: false, Message: err.Error()}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	entries, err := store.ListBlocklistEntries(ctx)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("blocklist を取得できませんでした: %v", err),
+		}
+	}
+
+	exportedAt := time.Now()
+	data, err := exporter.MarshalBlocklistJSON(entries, exportedAt)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("blocklist JSON を生成できませんでした: %v", err),
+		}
+	}
+
+	return a.saveExportFile(
+		"ブロックリスト JSON を保存",
+		buildExportFilename("mairu-blocklist", exportedAt, ".json"),
+		[]runtime.FileFilter{{DisplayName: "JSON ファイル", Pattern: "*.json"}},
+		data,
+	)
+}
+
+// ImportBlocklistJSON は JSON ファイルから blocklist を取り込む。
+func (a *App) ImportBlocklistJSON() types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{Success: false, Message: err.Error()}
+	}
+
+	path, err := runtime.OpenFileDialog(a.baseContext(), runtime.OpenDialogOptions{
+		Title:            "取り込むブロックリスト JSON を選択",
+		DefaultDirectory: defaultExportDirectory(),
+		Filters:          []runtime.FileFilter{{DisplayName: "JSON ファイル", Pattern: "*.json"}},
+	})
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("ファイル選択ダイアログを開けませんでした: %v", err),
+		}
+	}
+	if strings.TrimSpace(path) == "" {
+		return types.OperationResult{
+			Success: false,
+			Message: "blocklist JSON の取り込みをキャンセルしました。",
+		}
+	}
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("選択した JSON を読み込めませんでした: %v", err),
+		}
+	}
+
+	entries, err := exporter.ParseBlocklistJSON(payload)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("blocklist JSON を解釈できませんでした: %v", err),
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	imported, err := store.ImportBlocklistEntries(ctx, entries)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("blocklist を取り込めませんでした: %v", err),
+		}
+	}
+
+	return types.OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("blocklist を %d 件取り込みました。", imported),
+	}
+}
+
+// ExportImportantSummaryCSV は重要メールサマリーを CSV へ出力する。
+func (a *App) ExportImportantSummaryCSV() types.OperationResult {
+	return a.exportClassificationLogs(
+		"重要メールサマリー (CSV) を保存",
+		"mairu-important-summary",
+		".csv",
+		[]runtime.FileFilter{{DisplayName: "CSV ファイル", Pattern: "*.csv"}},
+		func(entries []types.ClassificationLogEntry, exportedAt time.Time) ([]byte, error) {
+			return exporter.MarshalImportantSummaryCSV(entries)
+		},
+	)
+}
+
+// ExportImportantSummaryPDF は重要メールサマリーを PDF へ出力する。
+func (a *App) ExportImportantSummaryPDF() types.OperationResult {
+	return a.exportClassificationLogs(
+		"重要メールサマリー (PDF) を保存",
+		"mairu-important-summary",
+		".pdf",
+		[]runtime.FileFilter{{DisplayName: "PDF ファイル", Pattern: "*.pdf"}},
+		exporter.MarshalImportantSummaryPDF,
+	)
+}
+
+// ExportDailyLogsCSV は日別分類ログを CSV へ出力する。
+func (a *App) ExportDailyLogsCSV() types.OperationResult {
+	return a.exportClassificationLogs(
+		"日別分類ログ (CSV) を保存",
+		"mairu-daily-logs",
+		".csv",
+		[]runtime.FileFilter{{DisplayName: "CSV ファイル", Pattern: "*.csv"}},
+		func(entries []types.ClassificationLogEntry, exportedAt time.Time) ([]byte, error) {
+			return exporter.MarshalDailyLogsCSV(entries)
+		},
+	)
+}
+
+// ExportDailyLogsJSON は日別分類ログを JSON へ出力する。
+func (a *App) ExportDailyLogsJSON() types.OperationResult {
+	return a.exportClassificationLogs(
+		"日別分類ログ (JSON) を保存",
+		"mairu-daily-logs",
+		".json",
+		[]runtime.FileFilter{{DisplayName: "JSON ファイル", Pattern: "*.json"}},
+		exporter.MarshalDailyLogsJSON,
+	)
 }
 
 // GetBlocklistSuggestions は修正履歴からブロック候補を返す。
@@ -776,10 +997,262 @@ func (a *App) requireDBStore() (*db.Store, error) {
 	a.mu.RUnlock()
 
 	if !ready || store == nil {
-		return nil, errors.New("SQLite が初期化されていないためブロックリスト操作を実行できません")
+		return nil, errors.New("SQLite が初期化されていないためローカルデータ操作を実行できません")
 	}
 
 	return store, nil
+}
+
+func (a *App) exportActionLogs(
+	title string,
+	prefix string,
+	extension string,
+	filters []runtime.FileFilter,
+	build func([]types.ActionLogEntry, time.Time) ([]byte, error),
+) types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{Success: false, Message: err.Error()}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	entries, err := store.ListActionLogEntries(ctx)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("処理ログを取得できませんでした: %v", err),
+		}
+	}
+
+	exportedAt := time.Now()
+	data, err := build(entries, exportedAt)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("エクスポートデータを生成できませんでした: %v", err),
+		}
+	}
+
+	return a.saveExportFile(title, buildExportFilename(prefix, exportedAt, extension), filters, data)
+}
+
+func (a *App) exportClassificationLogs(
+	title string,
+	prefix string,
+	extension string,
+	filters []runtime.FileFilter,
+	build func([]types.ClassificationLogEntry, time.Time) ([]byte, error),
+) types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{Success: false, Message: err.Error()}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	entries, err := store.ListClassificationLogEntries(ctx)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("分類ログを取得できませんでした: %v", err),
+		}
+	}
+
+	exportedAt := time.Now()
+	data, err := build(entries, exportedAt)
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("エクスポートデータを生成できませんでした: %v", err),
+		}
+	}
+
+	return a.saveExportFile(title, buildExportFilename(prefix, exportedAt, extension), filters, data)
+}
+
+func (a *App) saveExportFile(
+	title string,
+	filename string,
+	filters []runtime.FileFilter,
+	data []byte,
+) types.OperationResult {
+	path, err := runtime.SaveFileDialog(a.baseContext(), runtime.SaveDialogOptions{
+		Title:            title,
+		DefaultDirectory: defaultExportDirectory(),
+		DefaultFilename:  filename,
+		Filters:          filters,
+	})
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("保存ダイアログを開けませんでした: %v", err),
+		}
+	}
+	if strings.TrimSpace(path) == "" {
+		return types.OperationResult{
+			Success: false,
+			Message: "ファイル保存をキャンセルしました。",
+		}
+	}
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("ファイルを書き込めませんでした: %v", err),
+		}
+	}
+
+	return types.OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("エクスポートを保存しました: %s", filepath.Base(path)),
+	}
+}
+
+func buildClassificationLogEntries(
+	request types.RecordClassificationRunRequest,
+) ([]types.ClassificationLogEntry, error) {
+	if len(request.Messages) == 0 {
+		return nil, errors.New("分類対象メールがありません")
+	}
+	if len(request.Results) == 0 {
+		return nil, errors.New("分類結果がありません")
+	}
+
+	messageByID := make(map[string]types.EmailSummary, len(request.Messages))
+	for _, message := range request.Messages {
+		messageByID[strings.TrimSpace(message.ID)] = message
+	}
+
+	entries := make([]types.ClassificationLogEntry, 0, len(request.Results))
+	for _, result := range request.Results {
+		messageID := strings.TrimSpace(result.MessageID)
+		if messageID == "" {
+			return nil, errors.New("分類結果の message_id が空です")
+		}
+		if !result.Category.IsValid() {
+			return nil, fmt.Errorf("分類結果 %q の category が不正です", messageID)
+		}
+		if !result.ReviewLevel.IsValid() {
+			return nil, fmt.Errorf("分類結果 %q の review_level が不正です", messageID)
+		}
+		if !result.Source.IsValid() {
+			return nil, fmt.Errorf("分類結果 %q の source が不正です", messageID)
+		}
+
+		message, ok := messageByID[messageID]
+		if !ok {
+			return nil, fmt.Errorf("分類結果 %q に対応するメール情報が見つかりません", messageID)
+		}
+
+		entries = append(entries, types.ClassificationLogEntry{
+			MessageID:   messageID,
+			ThreadID:    strings.TrimSpace(message.ThreadID),
+			From:        strings.TrimSpace(message.From),
+			Subject:     strings.TrimSpace(message.Subject),
+			Snippet:     strings.TrimSpace(message.Snippet),
+			Category:    result.Category,
+			Confidence:  result.Confidence,
+			ReviewLevel: result.ReviewLevel,
+			Source:      result.Source,
+		})
+	}
+
+	return entries, nil
+}
+
+func buildActionLogEntries(
+	request types.ExecuteGmailActionsRequest,
+	result types.ExecuteGmailActionsResult,
+) ([]types.ActionLogEntry, error) {
+	metadataByID := make(map[string]types.GmailActionMetadata, len(request.Metadata))
+	for _, item := range request.Metadata {
+		messageID := strings.TrimSpace(item.MessageID)
+		if messageID == "" {
+			return nil, errors.New("action metadata の message_id が空です")
+		}
+		metadataByID[messageID] = item
+	}
+
+	failureByID := make(map[string]types.GmailActionFailure, len(result.Failures))
+	for _, failure := range result.Failures {
+		failureByID[strings.TrimSpace(failure.MessageID)] = failure
+	}
+
+	entries := make([]types.ActionLogEntry, 0, len(request.Decisions))
+	for _, decision := range request.Decisions {
+		messageID := strings.TrimSpace(decision.MessageID)
+		metadata := metadataByID[messageID]
+		category := metadata.Category
+		if !category.IsValid() {
+			category = decision.Category
+		}
+		reviewLevel := metadata.ReviewLevel
+		if !reviewLevel.IsValid() {
+			reviewLevel = decision.ReviewLevel
+		}
+		source := metadata.Source
+		if !source.IsValid() {
+			source = types.ClassificationSourceClaude
+		}
+
+		entry := types.ActionLogEntry{
+			MessageID:   messageID,
+			ThreadID:    strings.TrimSpace(metadata.ThreadID),
+			From:        strings.TrimSpace(metadata.From),
+			Subject:     strings.TrimSpace(metadata.Subject),
+			ActionKind:  primaryActionKindForDecision(decision),
+			Status:      "success",
+			Detail:      "",
+			Category:    category,
+			Confidence:  metadata.Confidence,
+			ReviewLevel: reviewLevel,
+			Source:      source,
+		}
+
+		if failure, failed := failureByID[messageID]; failed {
+			entry.ActionKind = failure.Action
+			entry.Status = "failed"
+			entry.Detail = failure.Error
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+func buildExportFilename(prefix string, now time.Time, extension string) string {
+	return fmt.Sprintf("%s-%s%s", prefix, now.Format("20060102-150405"), extension)
+}
+
+func defaultExportDirectory() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+
+	downloads := filepath.Join(home, defaultExportDirName)
+	if info, statErr := os.Stat(downloads); statErr == nil && info.IsDir() {
+		return downloads
+	}
+
+	return home
+}
+
+func primaryActionKindForDecision(decision types.GmailActionDecision) types.ActionKind {
+	switch decision.Category {
+	case types.ClassificationCategoryJunk:
+		return types.ActionKindDelete
+	case types.ClassificationCategoryArchive:
+		return types.ActionKindArchive
+	case types.ClassificationCategoryNewsletter:
+		return types.ActionKindMarkRead
+	default:
+		return types.ActionKindLabel
+	}
 }
 
 func (a *App) classifyByBlocklist(
