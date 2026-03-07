@@ -81,6 +81,8 @@ function App() {
                             <button
                                 className={`app-nav-button ${view === 'settings' ? 'active' : ''}`}
                                 type="button"
+                                aria-pressed={view === 'settings'}
+                                aria-current={view === 'settings' ? 'page' : undefined}
                                 onClick={() => {
                                     setView('settings');
                                 }}
@@ -90,6 +92,8 @@ function App() {
                             <button
                                 className={`app-nav-button ${view === 'classify' ? 'active' : ''}`}
                                 type="button"
+                                aria-pressed={view === 'classify'}
+                                aria-current={view === 'classify' ? 'page' : undefined}
                                 onClick={() => {
                                     setView('classify');
                                 }}

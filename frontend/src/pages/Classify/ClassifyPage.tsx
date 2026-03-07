@@ -22,6 +22,8 @@ type ClassifiedRow = {
     message: EmailSummary | undefined;
 };
 
+const sampleMessageCount = 50;
+
 const sampleSenders = [
     'alerts@bank.example',
     'newsletter@service.example',
@@ -197,9 +199,10 @@ function formatClassifiedAt(value: string | null): string {
 }
 
 export function ClassifyPage({ status }: ClassifyPageProps) {
-    const [messages, setMessages] = useState<EmailSummary[]>(() => buildSampleMessages(50));
+    const [messages, setMessages] = useState<EmailSummary[]>(() =>
+        buildSampleMessages(sampleMessageCount));
     const [results, setResults] = useState<ClassificationResponse['results']>(() =>
-        buildMockResults(buildSampleMessages(50)));
+        buildMockResults(buildSampleMessages(sampleMessageCount)));
     const [filter, setFilter] = useState<ReviewFilter>('all');
     const [selectedForApproval, setSelectedForApproval] = useState<Record<string, boolean>>({});
     const [classifyModel, setClassifyModel] = useState('');
@@ -255,7 +258,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     }
 
     function handleGenerateSample() {
-        const generated = buildSampleMessages(50);
+        const generated = buildSampleMessages(sampleMessageCount);
         setMessages(generated);
         setResults(buildMockResults(generated));
         setError(null);
@@ -409,6 +412,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                 key={option.value}
                                 type="button"
                                 className={`filter-button ${filter === option.value ? 'active' : ''}`}
+                                aria-pressed={filter === option.value}
                                 onClick={() => {
                                     setFilter(option.value);
                                 }}
@@ -433,7 +437,13 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                         </thead>
                         <tbody>
                             {filteredRows.map((row) => {
-                                const confidencePercent = Math.round(row.result.confidence * 100);
+                                const numericConfidence = Number.isFinite(row.result.confidence)
+                                    ? row.result.confidence
+                                    : 0;
+                                const confidencePercent = Math.min(
+                                    100,
+                                    Math.max(0, Math.round(numericConfidence * 100)),
+                                );
                                 const approvalEnabled = row.result.reviewLevel !== 'auto_apply';
                                 return (
                                     <tr key={row.result.messageID}>
