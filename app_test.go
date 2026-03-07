@@ -301,7 +301,7 @@ func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 						"expires_in":3600
 					}`)),
 				}, nil
-			case "https://gmail.test/gmail/v1/users/me/messages/batchDelete":
+			case "https://gmail.test/gmail/v1/users/me/messages/msg-1/trash":
 				if got := r.Header.Get("Authorization"); got != "Bearer fresh-access-token" {
 					t.Fatalf("Authorization mismatch: got %q", got)
 				}

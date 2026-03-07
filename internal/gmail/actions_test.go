@@ -95,13 +95,17 @@ func TestExecuteActionsCreatesLabelsAndAppliesOperations(t *testing.T) {
 					if r.Method != http.MethodPost {
 						t.Fatalf("step5 method: got %s, want %s", r.Method, http.MethodPost)
 					}
-					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/batchDelete" {
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/msg-3/trash" {
 						t.Fatalf("step5 url: got %s", r.URL.String())
 					}
-					var request batchDeleteRequest
-					mustDecodeJSONBody(t, r, &request)
-					if len(request.IDs) != 1 || request.IDs[0] != "msg-3" {
-						t.Fatalf("step5 ids: got %v", request.IDs)
+					if r.Body != nil {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Fatalf("step5 read body: %v", err)
+						}
+						if strings.TrimSpace(string(body)) != "" {
+							t.Fatalf("step5 body: got %q, want empty", string(body))
+						}
 					}
 					step++
 					return &http.Response{
@@ -186,6 +190,9 @@ func TestExecuteActionsKeepsProcessingOnPartialFailure(t *testing.T) {
 					step++
 					return jsonResponse(http.StatusBadRequest, `{"error":{"code":400,"message":"invalid modify request"}}`), nil
 				case 2:
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/msg-2/trash" {
+						t.Fatalf("step2 url: got %s", r.URL.String())
+					}
 					step++
 					return &http.Response{
 						StatusCode: http.StatusNoContent,
@@ -272,6 +279,100 @@ func TestBuildActionPlansAddsNeedsReviewLabel(t *testing.T) {
 	}
 	if got := strings.Join(requiredLabels, ","); got != "Mairu/Needs Review,Mairu/Unread Priority" {
 		t.Fatalf("requiredLabels = %v", requiredLabels)
+	}
+}
+
+func TestBuildActionPlansSkipsNeedsReviewLabelForDelete(t *testing.T) {
+	t.Parallel()
+
+	plans, requiredLabels, err := buildActionPlans([]types.GmailActionDecision{
+		{
+			MessageID:   "msg-1",
+			Category:    types.ClassificationCategoryJunk,
+			ReviewLevel: types.ClassificationReviewLevelHold,
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildActionPlans returned error: %v", err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("plans length = %d, want 1", len(plans))
+	}
+	if !plans[0].delete {
+		t.Fatalf("delete = false, want true")
+	}
+	if len(plans[0].addLabelNames) != 0 {
+		t.Fatalf("addLabelNames = %v, want empty", plans[0].addLabelNames)
+	}
+	if len(requiredLabels) != 0 {
+		t.Fatalf("requiredLabels = %v, want empty", requiredLabels)
+	}
+}
+
+func TestExecuteActionsLabelCreateRaceFallsBackToRelist(t *testing.T) {
+	t.Parallel()
+
+	step := 0
+	client := NewClient(Options{
+		BaseURL: "https://gmail.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				switch step {
+				case 0:
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+						t.Fatalf("step0 url: got %s", r.URL.String())
+					}
+					step++
+					return jsonResponse(http.StatusOK, `{"labels":[]}`), nil
+				case 1:
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+						t.Fatalf("step1 url: got %s", r.URL.String())
+					}
+					step++
+					return jsonResponse(http.StatusConflict, `{"error":{"code":409,"message":"label already exists"}}`), nil
+				case 2:
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+						t.Fatalf("step2 url: got %s", r.URL.String())
+					}
+					step++
+					return jsonResponse(http.StatusOK, `{"labels":[{"id":"LabelImportant","name":"Mairu/Important","type":"user"}]}`), nil
+				case 3:
+					if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/msg-1/modify" {
+						t.Fatalf("step3 url: got %s", r.URL.String())
+					}
+					var request messageModifyRequest
+					mustDecodeJSONBody(t, r, &request)
+					if len(request.AddLabelIDs) != 1 || request.AddLabelIDs[0] != "LabelImportant" {
+						t.Fatalf("step3 addLabelIds: got %v", request.AddLabelIDs)
+					}
+					step++
+					return jsonResponse(http.StatusOK, `{}`), nil
+				default:
+					t.Fatalf("unexpected step: %d", step)
+					return nil, nil
+				}
+			}),
+		},
+	})
+
+	result, err := client.ExecuteActions(context.Background(), "access-token", []types.GmailActionDecision{
+		{
+			MessageID:   "msg-1",
+			Category:    types.ClassificationCategoryImportant,
+			ReviewLevel: types.ClassificationReviewLevelReview,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteActions returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, want true")
+	}
+	if len(result.CreatedLabels) != 0 {
+		t.Fatalf("CreatedLabels = %v, want empty", result.CreatedLabels)
+	}
+	if step != 4 {
+		t.Fatalf("step count = %d, want 4", step)
 	}
 }
 

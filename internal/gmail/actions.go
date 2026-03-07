@@ -17,8 +17,8 @@ import (
 
 const (
 	labelsPath        = "/gmail/v1/users/me/labels"
-	batchDeletePath   = "/gmail/v1/users/me/messages/batchDelete"
 	messageModifyPath = "/gmail/v1/users/me/messages/%s/modify"
+	messageTrashPath  = "/gmail/v1/users/me/messages/%s/trash"
 
 	systemLabelInbox  = "INBOX"
 	systemLabelUnread = "UNREAD"
@@ -49,10 +49,6 @@ type createLabelRequest struct {
 type messageModifyRequest struct {
 	AddLabelIDs    []string `json:"addLabelIds,omitempty"`
 	RemoveLabelIDs []string `json:"removeLabelIds,omitempty"`
-}
-
-type batchDeleteRequest struct {
-	IDs []string `json:"ids"`
 }
 
 type actionPlan struct {
@@ -96,10 +92,24 @@ func (c *Client) ExecuteActions(
 		CreatedLabels:  createdLabels,
 	}
 
-	deleteIDs := make([]string, 0, len(plans))
 	for _, plan := range plans {
 		if plan.delete {
-			deleteIDs = append(deleteIDs, plan.messageID)
+			path := fmt.Sprintf(messageTrashPath, url.PathEscape(plan.messageID))
+			if err := c.doJSONRequest(
+				ctx,
+				http.MethodPost,
+				path,
+				trimmedToken,
+				"メールをゴミ箱へ移動",
+				nil,
+				nil,
+			); err != nil {
+				appendActionFailure(&result, plan.messageID, types.ActionKindDelete, err)
+				continue
+			}
+
+			result.SuccessCount++
+			result.DeletedCount++
 			continue
 		}
 
@@ -138,27 +148,6 @@ func (c *Client) ExecuteActions(
 		}
 		if plan.hasMarkRead {
 			result.MarkedReadCount++
-		}
-	}
-
-	if len(deleteIDs) > 0 {
-		if err := c.doJSONRequest(
-			ctx,
-			http.MethodPost,
-			batchDeletePath,
-			trimmedToken,
-			"メール削除",
-			batchDeleteRequest{
-				IDs: deleteIDs,
-			},
-			nil,
-		); err != nil {
-			for _, messageID := range deleteIDs {
-				appendActionFailure(&result, messageID, types.ActionKindDelete, err)
-			}
-		} else {
-			result.SuccessCount += len(deleteIDs)
-			result.DeletedCount += len(deleteIDs)
 		}
 	}
 
@@ -230,8 +219,8 @@ func buildActionPlans(
 			plan.addSystemLabelIDs = append(plan.addSystemLabelIDs, systemLabelUnread)
 		}
 
-		if decision.ReviewLevel == types.ClassificationReviewLevelHold ||
-			decision.ReviewLevel == types.ClassificationReviewLevelReviewWithReason {
+		if !plan.delete && (decision.ReviewLevel == types.ClassificationReviewLevelHold ||
+			decision.ReviewLevel == types.ClassificationReviewLevelReviewWithReason) {
 			plan.addLabelNames = append(plan.addLabelNames, mairuLabelNeedsReview)
 		}
 
@@ -332,6 +321,13 @@ func (c *Client) ensureLabels(
 
 		label, err := c.createLabel(ctx, accessToken, labelName)
 		if err != nil {
+			refreshed, listErr := c.listLabels(ctx, accessToken)
+			if listErr == nil {
+				if labelID, exists := refreshed[labelName]; exists {
+					labelByName[labelName] = labelID
+					continue
+				}
+			}
 			return nil, nil, err
 		}
 		labelByName[label.Name] = label.ID
