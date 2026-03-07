@@ -8,6 +8,8 @@ import {
     type ClassificationResponse,
     type ClassificationReviewLevel,
     type EmailSummary,
+    executeGmailActions,
+    type ExecuteGmailActionsResult,
     type RuntimeStatus,
 } from '../../lib/runtime';
 
@@ -198,6 +200,21 @@ function formatClassifiedAt(value: string | null): string {
     }).format(parsed);
 }
 
+function actionKindLabel(action: 'label' | 'archive' | 'delete' | 'mark_read'): string {
+    switch (action) {
+    case 'label':
+        return 'ラベル付与';
+    case 'archive':
+        return 'アーカイブ';
+    case 'delete':
+        return '削除';
+    case 'mark_read':
+        return '既読化';
+    default:
+        return action;
+    }
+}
+
 export function ClassifyPage({ status }: ClassifyPageProps) {
     const [messages, setMessages] = useState<EmailSummary[]>(() =>
         buildSampleMessages(sampleMessageCount));
@@ -208,6 +225,9 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     const [classifyModel, setClassifyModel] = useState('');
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [actionPending, setActionPending] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [lastActionResult, setLastActionResult] = useState<ExecuteGmailActionsResult | null>(null);
     const [lastClassifiedAt, setLastClassifiedAt] = useState<string | null>(
         new Date().toISOString(),
     );
@@ -253,6 +273,16 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         return rows.filter((row) => selectedForApproval[row.result.messageID]).length;
     }, [rows, selectedForApproval]);
 
+    const selectedDecisions = useMemo(() => {
+        return rows
+            .filter((row) => selectedForApproval[row.result.messageID])
+            .map((row) => ({
+                messageID: row.result.messageID,
+                category: row.result.category,
+                reviewLevel: row.result.reviewLevel,
+            }));
+    }, [rows, selectedForApproval]);
+
     function resetApprovalSelection() {
         setSelectedForApproval({});
     }
@@ -262,6 +292,8 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         setMessages(generated);
         setResults(buildMockResults(generated));
         setError(null);
+        setActionError(null);
+        setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
     }
@@ -269,6 +301,8 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     function handleShowMockResults() {
         setResults(buildMockResults(messages));
         setError(null);
+        setActionError(null);
+        setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
     }
@@ -289,6 +323,8 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
 
             setResults(response.results);
             setLastClassifiedAt(new Date().toISOString());
+            setActionError(null);
+            setLastActionResult(null);
             resetApprovalSelection();
         } catch (cause) {
             const message =
@@ -308,10 +344,53 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         }));
     }
 
+    async function handleExecuteSelectedActions() {
+        if (selectedDecisions.length === 0) {
+            setActionError('実行対象を選択してください。');
+            return;
+        }
+
+        const deleteCount = selectedDecisions.filter((item) => item.category === 'junk').length;
+        const confirmed = window.confirm(
+            [
+                `選択した ${selectedDecisions.length} 件を Gmail に反映します。`,
+                deleteCount > 0 ? `このうち ${deleteCount} 件は削除されます。` : '削除対象は含まれていません。',
+                '実行しますか？',
+            ].join('\n'),
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        setActionPending(true);
+        setActionError(null);
+
+        try {
+            const result = await executeGmailActions({
+                confirmed: true,
+                decisions: selectedDecisions,
+            });
+            setLastActionResult(result);
+            resetApprovalSelection();
+
+            if (!result.success) {
+                setActionError(result.message);
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'Gmail アクション実行に失敗しました。';
+            setActionError(message);
+        } finally {
+            setActionPending(false);
+        }
+    }
+
     return (
         <div className="classify-page">
             <section className="classify-hero">
-                <p className="classify-eyebrow">MAIRU-008 / #8</p>
+                <p className="classify-eyebrow">MAIRU-009 / #9</p>
                 <h1>分類確認</h1>
                 <p className="classify-lead">
                     50 件の分類結果を信頼度で振り分け、承認対象を判断するための画面です。
@@ -396,6 +475,91 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                     <h2>保留</h2>
                     <p>{reviewCounts.hold} 件</p>
                 </article>
+            </section>
+
+            <section className="classify-actions" aria-label="承認済み Gmail アクション実行">
+                <div className="classify-actions-header">
+                    <div>
+                        <h2>承認済みアクション実行</h2>
+                        <p>
+                            選択中 {selectedDecisions.length} 件を Gmail 側へ反映します。
+                            削除を含む場合は確認ダイアログを表示します。
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        className="classify-primary-button"
+                        onClick={() => {
+                            void handleExecuteSelectedActions();
+                        }}
+                        disabled={
+                            actionPending ||
+                            pending ||
+                            !status.gmailConnected ||
+                            selectedDecisions.length === 0
+                        }
+                    >
+                        {actionPending ? 'Gmail 反映中...' : '選択した承認を Gmail に適用'}
+                    </button>
+                </div>
+                {!status.gmailConnected ? (
+                    <p className="classify-inline-note">
+                        Gmail 接続未確認のため実行できません。Settings で接続確認を先に行ってください。
+                    </p>
+                ) : null}
+                {lastActionResult ? (
+                    <div className="classify-action-result">
+                        <p className={lastActionResult.success ? 'classify-inline-note' : 'classify-error-note'}>
+                            {lastActionResult.message}
+                        </p>
+                        <dl className="classify-action-stats">
+                            <div>
+                                <dt>成功</dt>
+                                <dd>{lastActionResult.successCount} 件</dd>
+                            </div>
+                            <div>
+                                <dt>失敗</dt>
+                                <dd>{lastActionResult.failureCount} 件</dd>
+                            </div>
+                            <div>
+                                <dt>削除</dt>
+                                <dd>{lastActionResult.deletedCount} 件</dd>
+                            </div>
+                            <div>
+                                <dt>アーカイブ</dt>
+                                <dd>{lastActionResult.archivedCount} 件</dd>
+                            </div>
+                            <div>
+                                <dt>既読化</dt>
+                                <dd>{lastActionResult.markedReadCount} 件</dd>
+                            </div>
+                            <div>
+                                <dt>ラベル付与</dt>
+                                <dd>{lastActionResult.labeledCount} 件</dd>
+                            </div>
+                        </dl>
+                        {lastActionResult.createdLabels.length > 0 ? (
+                            <p className="classify-inline-note">
+                                新規作成ラベル: {lastActionResult.createdLabels.join(', ')}
+                            </p>
+                        ) : null}
+                        {lastActionResult.tokenRefreshed ? (
+                            <p className="classify-inline-note">
+                                実行前に Google トークンを更新しました。
+                            </p>
+                        ) : null}
+                        {lastActionResult.failures.length > 0 ? (
+                            <ul className="classify-failure-list">
+                                {lastActionResult.failures.map((failure) => (
+                                    <li key={`${failure.messageID}-${failure.action}`}>
+                                        {failure.messageID} / {actionKindLabel(failure.action)}: {failure.error}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : null}
+                    </div>
+                ) : null}
+                {actionError ? <p className="classify-error-note">{actionError}</p> : null}
             </section>
 
             <section className="classify-results" aria-label="分類結果一覧">

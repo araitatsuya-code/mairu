@@ -248,6 +248,118 @@ func TestClassifyEmailsUsesStoredClaudeAPIKey(t *testing.T) {
 	}
 }
 
+func TestExecuteGmailActionsRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	app := &App{}
+
+	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: false,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-1",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelReview,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteGmailActions returned error: %v", err)
+	}
+	if result.Success {
+		t.Fatalf("Success = true, want false")
+	}
+	if !strings.Contains(result.Message, "確認ステップ") {
+		t.Fatalf("Message = %q, want contains 確認ステップ", result.Message)
+	}
+}
+
+func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
+	t.Parallel()
+
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveGoogleToken(context.Background(), auth.TokenSet{
+		AccessToken:  "expired-access-token",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.String() {
+			case "https://oauth.test/token":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"access_token":"fresh-access-token",
+						"expires_in":3600
+					}`)),
+				}, nil
+			case "https://gmail.test/gmail/v1/users/me/messages/batchDelete":
+				if got := r.Header.Get("Authorization"); got != "Bearer fresh-access-token" {
+					t.Fatalf("Authorization mismatch: got %q", got)
+				}
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     http.Header{},
+					Body:       io.NopCloser(strings.NewReader("")),
+				}, nil
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	app := &App{
+		authClient: auth.NewClient(auth.Config{
+			ClientID:     "client-id",
+			ClientSecret: "client-secret",
+			TokenURL:     "https://oauth.test/token",
+			HTTPClient:   httpClient,
+		}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+	}
+
+	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-1",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelReview,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteGmailActions returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, want true (message=%q)", result.Message)
+	}
+	if !result.TokenRefreshed {
+		t.Fatalf("TokenRefreshed = false, want true")
+	}
+	if result.DeletedCount != 1 {
+		t.Fatalf("DeletedCount = %d, want 1", result.DeletedCount)
+	}
+
+	stored, err := manager.LoadGoogleToken(context.Background())
+	if err != nil {
+		t.Fatalf("LoadGoogleToken returned error: %v", err)
+	}
+	if stored.AccessToken != "fresh-access-token" {
+		t.Fatalf("stored AccessToken = %q, want %q", stored.AccessToken, "fresh-access-token")
+	}
+}
+
 type appRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn appRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

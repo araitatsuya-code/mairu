@@ -106,6 +106,42 @@ type MessageAction struct {
 	Label     string
 }
 
+// GmailActionDecision は承認済み分類から導いた 1 通分の実行判断を表す。
+type GmailActionDecision struct {
+	MessageID   string
+	Category    ClassificationCategory
+	ReviewLevel ClassificationReviewLevel
+}
+
+// ExecuteGmailActionsRequest は Gmail アクション実行入力を表す。
+type ExecuteGmailActionsRequest struct {
+	Confirmed bool
+	Decisions []GmailActionDecision
+}
+
+// GmailActionFailure は Gmail アクション失敗詳細を表す。
+type GmailActionFailure struct {
+	MessageID string
+	Action    ActionKind
+	Error     string
+}
+
+// ExecuteGmailActionsResult は Gmail アクション実行結果を表す。
+type ExecuteGmailActionsResult struct {
+	Success         bool
+	Message         string
+	ProcessedCount  int
+	SuccessCount    int
+	FailureCount    int
+	DeletedCount    int
+	ArchivedCount   int
+	MarkedReadCount int
+	LabeledCount    int
+	CreatedLabels   []string
+	Failures        []GmailActionFailure
+	TokenRefreshed  bool
+}
+
 // RuntimeStatus は設定画面や初期化処理で共有する状態 DTO。
 type RuntimeStatus struct {
 	Authorized         bool
