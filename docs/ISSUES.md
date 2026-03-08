@@ -40,6 +40,11 @@
 | MAIRU-015 | #35 | ready | Phase 5 | 移行アシスタント | MAIRU-012 |
 | MAIRU-016 | #36 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
 | MAIRU-017 | #37 | backlog | v2+ | AI アシスタント機能 | MAIRU-014 |
+| MAIRU-018 | #38 | done | Phase 2 | 大量メール耐性と段階実行の要件定義 | MAIRU-009 |
+| MAIRU-019 | #39 | ready | Phase 4 | 新着 safe-run 日次実行と `last_run_at` 管理 | MAIRU-013, MAIRU-018 |
+| MAIRU-020 | #40 | ready | Phase 4 | 50 件バッチ checkpoint 保存と再開 | MAIRU-010, MAIRU-013, MAIRU-018 |
+| MAIRU-021 | #41 | ready | Phase 4 | `action_logs` ベースの Gmail アクション重複防止 | MAIRU-009, MAIRU-010, MAIRU-018 |
+| MAIRU-022 | #42 | blocked | Phase 4 | 手動 backlog 実行の件数上限と再開導線 | MAIRU-019, MAIRU-020, MAIRU-021 |
 
 ## Issue 詳細
 
@@ -284,6 +289,91 @@
 - 完了条件:
   - コア機能を壊さず拡張できる設計が固まる
   - 削除系操作に必ず確認導線が入る
+
+### MAIRU-018: 大量メール耐性と段階実行の要件定義
+- 状態: `done`
+- フェーズ: Phase 2
+- GitHub: `#38`
+- 依存: `MAIRU-009`
+- 目的: 既存の `scheduler` `settings` `action_logs` を活かしつつ、大幅な再設計なしで大量メールを安全に段階処理できる要件を確定する。
+- 対応内容:
+  - 定期実行を `last_run_at` ベースの新着 `safe-run` に限定する方針を定義する
+  - `50 件` バッチ単位の checkpoint 保存と再開要件を定義する
+  - `action_logs` を使った Gmail アクション重複防止要件を定義する
+  - 自動削除を抑えた `safe-run` / `full-run` の運用境界を定義する
+  - ドメイン連鎖探索と watchdog 常駐監視を v1 のスコープ外へ切り分ける
+  - 後続実装 issue に分割できる粒度までタスク分解する
+- 完了条件:
+  - 実用寄りの要件文書が `docs/mairu_018_requirements.md` に反映される
+  - 実装 issue（新着 `safe-run`、checkpoint、重複防止、手動 backlog 導線）がローカル backlog に分割される
+  - 100 件 / 1,000 件 / 14,000 件想定の検証観点が揃う
+
+### MAIRU-019: 新着 safe-run 日次実行と `last_run_at` 管理
+- 状態: `ready`
+- フェーズ: Phase 4
+- GitHub: `#39`
+- 依存: `MAIRU-013`, `MAIRU-018`
+- 目的: 定期実行が backlog 全量ではなく新着のみを安全に処理するようにし、日常利用できる自動分類の土台を作る。
+- 対応内容:
+  - 定期分類ジョブの対象を `last_run_at` 以降のメールに限定する
+  - `last_run_at` 未設定時は大量 backlog を自動実行せず、手動実行へ誘導する
+  - 定期実行のモードを `safe-run` 固定にする
+  - 成功時のみ `last_run_at` を更新し、失敗時は更新しない
+  - 停止理由に応じた通知文言を整理する
+- 完了条件:
+  - 定期実行で新着メールのみが対象になる
+  - 初回起動時に backlog 全量の自動処理が走らない
+  - 成功時のみ `last_run_at` が更新される
+
+### MAIRU-020: 50 件バッチ checkpoint 保存と再開
+- 状態: `ready`
+- フェーズ: Phase 4
+- GitHub: `#40`
+- 依存: `MAIRU-010`, `MAIRU-013`, `MAIRU-018`
+- 目的: 大量メール処理が途中停止しても、最後に完了した `50 件` バッチの次から再開できるようにする。
+- 対応内容:
+  - 実行種別、抽出条件、完了バッチ番号、件数集計を `settings` へ保存する
+  - `50 件` バッチ完了ごとに checkpoint を更新する
+  - 再開時は同じ抽出条件で対象を再取得し、完了済みバッチぶんをスキップする
+  - timeout / retry 上限超過 / cancel 時の checkpoint 更新ルールを定義して実装する
+  - 再開導線に必要な API / UI 入出力を整理する
+- 完了条件:
+  - 1,000 件処理の途中停止後、最後の完了バッチから再開できる
+  - バッチ途中失敗時に checkpoint が壊れない
+  - アプリ再起動後も再開情報が残る
+
+### MAIRU-021: `action_logs` ベースの Gmail アクション重複防止
+- 状態: `ready`
+- フェーズ: Phase 4
+- GitHub: `#41`
+- 依存: `MAIRU-009`, `MAIRU-010`, `MAIRU-018`
+- 目的: 再開時や再試行時に同一メールへ同一 Gmail アクションを二重適用しないようにする。
+- 対応内容:
+  - Gmail 反映前に `message_id` と action kind で `action_logs` を確認する
+  - `success` 済みアクションは再適用せずスキップとして記録する
+  - `failed` / `pending` の扱いを定義し、再試行対象を明確にする
+  - 処理結果のログ文言と通知集計へスキップ件数を反映する
+  - 重複防止のテストケースを追加する
+- 完了条件:
+  - 再開時に同一アクションが二重適用されない
+  - `action_logs` の状態と実挙動が一致する
+  - スキップ理由がログから追跡できる
+
+### MAIRU-022: 手動 backlog 実行の件数上限と再開導線
+- 状態: `blocked`
+- フェーズ: Phase 4
+- GitHub: `#42`
+- 依存: `MAIRU-019`, `MAIRU-020`, `MAIRU-021`
+- 目的: 大量 backlog を 1 回で抱え込まず、上限件数つきの手動実行で安全に段階消化できるようにする。
+- 対応内容:
+  - 手動 backlog 実行の既定件数と最大件数を設定する
+  - 実行中 / 中断 / 再開可能の状態を UI で案内できるようにする
+  - 次回候補として同一送信者メールアドレス完全一致候補を提示する
+  - 手動 `full-run` の承認境界と削除ガードを整理する
+- 完了条件:
+  - backlog を 500 件単位で安全に手動実行できる
+  - 再開可能な場合に UI から続行操作ができる
+  - 段階消化の運用手順がドキュメントで説明できる
 
 ## GitHub Issue 化するときの手順
 1. このファイルから対象 issue を選ぶ。
