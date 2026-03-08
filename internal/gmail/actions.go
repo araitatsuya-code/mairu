@@ -443,11 +443,17 @@ func (c *Client) doJSONRequest(
 		if decodeErr := json.NewDecoder(response.Body).Decode(&failure); decodeErr == nil {
 			message := strings.TrimSpace(failure.Error.Message)
 			if message != "" {
-				return fmt.Errorf("Gmail API %s に失敗しました (%d): %s", operation, response.StatusCode, message)
+				return apiStatusError{
+					statusCode: response.StatusCode,
+					err:        fmt.Errorf("Gmail API %s に失敗しました (%d): %s", operation, response.StatusCode, message),
+				}
 			}
 		}
 
-		return fmt.Errorf("Gmail API %s に失敗しました (HTTP %d)", operation, response.StatusCode)
+		return apiStatusError{
+			statusCode: response.StatusCode,
+			err:        fmt.Errorf("Gmail API %s に失敗しました (HTTP %d)", operation, response.StatusCode),
+		}
 	}
 
 	if responseBody == nil {

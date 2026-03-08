@@ -1172,6 +1172,184 @@ func TestBuildSchedulerSafeRunDecisionsConvertsJunkAndCountsPending(t *testing.T
 	}
 }
 
+func TestRunScheduledClassificationPaginatesAllPages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	secretStore := auth.NewMemorySecretStore()
+	secretManager := auth.NewSecretManager(secretStore)
+	if err := secretManager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+	if err := secretManager.SaveClaudeAPIKey(ctx, "claude-api-key"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	lastRunAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	if err := store.SetSetting(
+		ctx,
+		fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification),
+		lastRunAt.Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("SetSetting(job last_run_at) returned error: %v", err)
+	}
+
+	listCalls := 0
+	claudeCalls := 0
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: secretManager,
+		gmailClient: gmail.NewClient(gmail.Options{
+			BaseURL: "https://gmail.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					switch r.URL.Path {
+					case "/gmail/v1/users/me/messages":
+						listCalls++
+						query := r.URL.Query()
+						if got := query.Get("q"); got != "after:1772960400" {
+							t.Fatalf("q = %q, want %q", got, "after:1772960400")
+						}
+						switch listCalls {
+						case 1:
+							if token := query.Get("pageToken"); token != "" {
+								t.Fatalf("pageToken(1st) = %q, want empty", token)
+							}
+							return &http.Response{
+								StatusCode: http.StatusOK,
+								Header: http.Header{
+									"Content-Type": []string{"application/json"},
+								},
+								Body: io.NopCloser(strings.NewReader(`{
+									"messages":[{"id":"m1","threadId":"t1"}],
+									"nextPageToken":"page-2"
+								}`)),
+							}, nil
+						case 2:
+							if token := query.Get("pageToken"); token != "page-2" {
+								t.Fatalf("pageToken(2nd) = %q, want %q", token, "page-2")
+							}
+							return &http.Response{
+								StatusCode: http.StatusOK,
+								Header: http.Header{
+									"Content-Type": []string{"application/json"},
+								},
+								Body: io.NopCloser(strings.NewReader(`{
+									"messages":[{"id":"m2","threadId":"t2"}]
+								}`)),
+							}, nil
+						default:
+							t.Fatalf("unexpected list call count: %d", listCalls)
+							return nil, nil
+						}
+					case "/gmail/v1/users/me/messages/m1":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"id":"m1",
+								"threadId":"t1",
+								"snippet":"one",
+								"labelIds":["INBOX","UNREAD"],
+								"payload":{"headers":[{"name":"From","value":"one@example.com"},{"name":"Subject","value":"one"}]}
+							}`)),
+						}, nil
+					case "/gmail/v1/users/me/messages/m2":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"id":"m2",
+								"threadId":"t2",
+								"snippet":"two",
+								"labelIds":["INBOX"],
+								"payload":{"headers":[{"name":"From","value":"two@example.com"},{"name":"Subject","value":"two"}]}
+							}`)),
+						}, nil
+					default:
+						t.Fatalf("unexpected Gmail URL: %s", r.URL.String())
+						return nil, nil
+					}
+				}),
+			},
+		}),
+		claudeClient: claude.NewClient(claude.Options{
+			BaseURL: "https://claude.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Path != "/v1/messages" {
+						t.Fatalf("unexpected Claude URL: %s", r.URL.String())
+					}
+					claudeCalls++
+					var body string
+					switch claudeCalls {
+					case 1:
+						body = `{"content":[{"type":"text","text":"{\"results\":[{\"id\":\"m1\",\"category\":\"important\",\"confidence\":0.8,\"reason\":\"review\"}]}"}]}`
+					case 2:
+						body = `{"content":[{"type":"text","text":"{\"results\":[{\"id\":\"m2\",\"category\":\"newsletter\",\"confidence\":0.8,\"reason\":\"review\"}]}"}]}`
+					default:
+						t.Fatalf("unexpected Claude call count: %d", claudeCalls)
+						return nil, nil
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(body)),
+					}, nil
+				}),
+			},
+		}),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledClassification returned error: %v", err)
+	}
+	if result.Processed != 2 {
+		t.Fatalf("result.Processed = %d, want 2", result.Processed)
+	}
+	if result.PendingApproval != 2 {
+		t.Fatalf("result.PendingApproval = %d, want 2", result.PendingApproval)
+	}
+	if listCalls != 2 {
+		t.Fatalf("listCalls = %d, want 2", listCalls)
+	}
+	if claudeCalls != 2 {
+		t.Fatalf("claudeCalls = %d, want 2", claudeCalls)
+	}
+}
+
+func TestMaybeMarkSchedulerRetryableRecognizesParenthesizedStatus(t *testing.T) {
+	t.Parallel()
+
+	err := maybeMarkSchedulerRetryable(errors.New("Gmail API 取得に失敗しました (503): temporary"))
+	if !scheduler.IsRetryable(err) {
+		t.Fatalf("error should be retryable: %v", err)
+	}
+}
+
 func TestLogSchedulerEventStoresLastRunAtOnClassificationSucceeded(t *testing.T) {
 	t.Parallel()
 

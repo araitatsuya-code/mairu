@@ -1367,17 +1367,45 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	}
 
 	fetchQuery := buildSchedulerClassificationQuery(*lastRunAt)
-	fetched, err := a.gmailClient.FetchMessages(ctx, token.AccessToken, gmail.FetchRequest{
-		MaxResults: types.ClassificationMaxBatchSize,
-		LabelIDs:   []string{"INBOX"},
-		Query:      fetchQuery,
-	})
-	if err != nil {
-		return scheduler.Result{}, maybeMarkSchedulerRetryable(
-			fmt.Errorf("新着メール取得に失敗しました: %w", err),
-		)
+	pageToken := ""
+	pageCount := 0
+	fetchedCount := 0
+	aggregated := scheduler.Result{}
+
+	for {
+		fetched, err := a.gmailClient.FetchMessages(ctx, token.AccessToken, gmail.FetchRequest{
+			MaxResults: types.ClassificationMaxBatchSize,
+			LabelIDs:   []string{"INBOX"},
+			Query:      fetchQuery,
+			PageToken:  pageToken,
+		})
+		if err != nil {
+			return aggregated, maybeMarkSchedulerRetryable(
+				fmt.Errorf("新着メール取得に失敗しました: %w", err),
+			)
+		}
+
+		pageCount++
+		messages := fetched.Messages
+		fetchedCount += len(messages)
+
+		pageResult, err := a.runScheduledClassificationPage(messages)
+		aggregated.Processed += pageResult.Processed
+		aggregated.Success += pageResult.Success
+		aggregated.Failed += pageResult.Failed
+		aggregated.PendingApproval += pageResult.PendingApproval
+		if err != nil {
+			return aggregated, maybeMarkSchedulerRetryable(err)
+		}
+
+		nextPageToken := strings.TrimSpace(fetched.NextPageToken)
+		if nextPageToken == "" {
+			break
+		}
+		pageToken = nextPageToken
 	}
-	if len(fetched.Messages) == 0 {
+
+	if fetchedCount == 0 {
 		return scheduler.Result{
 			Skipped: true,
 			Message: fmt.Sprintf(
@@ -1387,68 +1415,15 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		}, nil
 	}
 
-	classification, err := a.ClassifyEmails(types.ClassificationRequest{
-		Messages: fetched.Messages,
-	})
-	if err != nil {
-		return scheduler.Result{}, maybeMarkSchedulerRetryable(
-			fmt.Errorf("新着メール分類に失敗しました: %w", err),
-		)
-	}
-	if len(classification.Results) == 0 {
-		return scheduler.Result{
-			Skipped: true,
-			Message: "新着メールの分類結果が空のため、safe-run 反映をスキップしました。",
-		}, nil
-	}
-
-	decisions, metadata, pendingApproval := buildSchedulerSafeRunDecisions(
-		fetched.Messages,
-		classification.Results,
+	aggregated.Message = fmt.Sprintf(
+		"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+		fetchedCount,
+		pageCount,
+		aggregated.Success,
+		aggregated.Failed,
+		aggregated.PendingApproval,
 	)
-
-	result := scheduler.Result{
-		Processed:       len(classification.Results),
-		PendingApproval: pendingApproval,
-	}
-	if len(decisions) == 0 {
-		result.Message = fmt.Sprintf(
-			"新着 %d 件を分類しました。承認待ち %d 件のため safe-run 反映は実行しませんでした。",
-			len(classification.Results),
-			pendingApproval,
-		)
-		return result, nil
-	}
-
-	actionResult, err := a.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
-		Confirmed: true,
-		Decisions: decisions,
-		Metadata:  metadata,
-	})
-	if err != nil {
-		return result, maybeMarkSchedulerRetryable(
-			fmt.Errorf("定期 safe-run 反映に失敗しました: %w", err),
-		)
-	}
-
-	result.Success = actionResult.SuccessCount
-	result.Failed = actionResult.FailureCount
-	if actionResult.FailureCount > 0 {
-		result.Message = fmt.Sprintf(
-			"新着 %d 件を分類し safe-run を実行しましたが、%d 件失敗しました。",
-			len(classification.Results),
-			actionResult.FailureCount,
-		)
-		return result, fmt.Errorf("safe-run 反映に失敗が含まれます: %s", actionResult.Message)
-	}
-
-	result.Message = fmt.Sprintf(
-		"新着 %d 件を分類し、safe-run で %d 件を反映しました。承認待ち %d 件。",
-		len(classification.Results),
-		actionResult.SuccessCount,
-		pendingApproval,
-	)
-	return result, nil
+	return aggregated, nil
 }
 
 func (a *App) runScheduledBlocklist(ctx context.Context) (scheduler.Result, error) {
@@ -1540,6 +1515,51 @@ func buildSchedulerClassificationQuery(lastRunAt time.Time) string {
 	return fmt.Sprintf("after:%d", normalized.Unix())
 }
 
+func (a *App) runScheduledClassificationPage(messages []types.EmailSummary) (scheduler.Result, error) {
+	if len(messages) == 0 {
+		return scheduler.Result{}, nil
+	}
+
+	classification, err := a.ClassifyEmails(types.ClassificationRequest{
+		Messages: messages,
+	})
+	if err != nil {
+		return scheduler.Result{}, fmt.Errorf("新着メール分類に失敗しました: %w", err)
+	}
+	if len(classification.Results) == 0 {
+		return scheduler.Result{}, nil
+	}
+
+	decisions, metadata, pendingApproval := buildSchedulerSafeRunDecisions(
+		messages,
+		classification.Results,
+	)
+
+	result := scheduler.Result{
+		Processed:       len(classification.Results),
+		PendingApproval: pendingApproval,
+	}
+	if len(decisions) == 0 {
+		return result, nil
+	}
+
+	actionResult, err := a.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: decisions,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return result, fmt.Errorf("定期 safe-run 反映に失敗しました: %w", err)
+	}
+
+	result.Success = actionResult.SuccessCount
+	result.Failed = actionResult.FailureCount
+	if actionResult.FailureCount > 0 {
+		return result, fmt.Errorf("safe-run 反映に失敗が含まれます: %s", actionResult.Message)
+	}
+	return result, nil
+}
+
 func buildSchedulerSafeRunDecisions(
 	messages []types.EmailSummary,
 	results []types.ClassificationResult,
@@ -1602,21 +1622,43 @@ func maybeMarkSchedulerRetryable(err error) error {
 		return nil
 	}
 
-	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "timeout") ||
-		strings.Contains(text, "temporarily unavailable") ||
-		strings.Contains(text, "connection reset") ||
-		strings.Contains(text, "http 429") {
-		return scheduler.MarkRetryable(err)
-	}
-
-	for statusCode := 500; statusCode <= 599; statusCode++ {
-		if strings.Contains(text, fmt.Sprintf("http %d", statusCode)) {
+	if statusCode, ok := schedulerHTTPStatusCode(err); ok {
+		if statusCode == 429 || (statusCode >= 500 && statusCode <= 599) {
 			return scheduler.MarkRetryable(err)
 		}
 	}
 
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "timeout") ||
+		strings.Contains(text, "temporarily unavailable") ||
+		strings.Contains(text, "connection reset") {
+		return scheduler.MarkRetryable(err)
+	}
+
 	return err
+}
+
+func schedulerHTTPStatusCode(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	var withStatus interface{ StatusCode() int }
+	if errors.As(err, &withStatus) {
+		statusCode := withStatus.StatusCode()
+		if statusCode >= 100 && statusCode <= 599 {
+			return statusCode, true
+		}
+	}
+
+	text := strings.ToLower(err.Error())
+	for statusCode := 100; statusCode <= 599; statusCode++ {
+		if strings.Contains(text, fmt.Sprintf("http %d", statusCode)) ||
+			strings.Contains(text, fmt.Sprintf("(%d)", statusCode)) {
+			return statusCode, true
+		}
+	}
+	return 0, false
 }
 
 func (a *App) saveSchedulerLastRun(jobID string, runAt time.Time, updateCommon bool) error {

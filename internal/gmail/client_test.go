@@ -128,7 +128,8 @@ func TestFetchMessages(t *testing.T) {
 							"messages":[
 								{"id":"m1","threadId":"t1"},
 								{"id":"m2","threadId":"t2"}
-							]
+							],
+							"nextPageToken":"next-page-token"
 						}`)),
 					}, nil
 				case r.URL.Path == "/gmail/v1/users/me/messages/m1":
@@ -188,6 +189,9 @@ func TestFetchMessages(t *testing.T) {
 	if len(result.Messages) != 2 {
 		t.Fatalf("len(Messages) = %d, want 2", len(result.Messages))
 	}
+	if result.NextPageToken != "next-page-token" {
+		t.Fatalf("NextPageToken = %q, want %q", result.NextPageToken, "next-page-token")
+	}
 	if result.Messages[0].ID != "m1" {
 		t.Fatalf("Messages[0].ID = %q, want %q", result.Messages[0].ID, "m1")
 	}
@@ -196,6 +200,76 @@ func TestFetchMessages(t *testing.T) {
 	}
 	if result.Messages[1].Unread {
 		t.Fatalf("Messages[1].Unread = true, want false")
+	}
+}
+
+func TestFetchMessagesSkipsMessageDetailFailures(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL: "https://gmail.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/gmail/v1/users/me/messages" {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{
+							"messages":[
+								{"id":"missing","threadId":"t1"},
+								{"id":"ok","threadId":"t2"}
+							]
+						}`)),
+					}, nil
+				}
+
+				switch r.URL.Path {
+				case "/gmail/v1/users/me/messages/missing":
+					return &http.Response{
+						StatusCode: http.StatusNotFound,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{
+							"error":{"code":404,"message":"Not found"}
+						}`)),
+					}, nil
+				case "/gmail/v1/users/me/messages/ok":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{
+							"id":"ok",
+							"threadId":"t2",
+							"snippet":"usable",
+							"labelIds":["INBOX"],
+							"payload":{"headers":[{"name":"From","value":"ok@example.com"},{"name":"Subject","value":"ok"}]}
+						}`)),
+					}, nil
+				default:
+					t.Fatalf("unexpected URL: %s", r.URL.String())
+					return nil, nil
+				}
+			}),
+		},
+	})
+
+	result, err := client.FetchMessages(context.Background(), "access-token", FetchRequest{
+		MaxResults: 2,
+		LabelIDs:   []string{"INBOX"},
+	})
+	if err != nil {
+		t.Fatalf("FetchMessages returned error: %v", err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(result.Messages))
+	}
+	if result.Messages[0].ID != "ok" {
+		t.Fatalf("Messages[0].ID = %q, want %q", result.Messages[0].ID, "ok")
 	}
 }
 

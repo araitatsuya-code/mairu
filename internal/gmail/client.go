@@ -3,7 +3,9 @@ package gmail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -53,6 +55,26 @@ type apiErrorResponse struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+type apiStatusError struct {
+	statusCode int
+	err        error
+}
+
+func (e apiStatusError) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("HTTP %d", e.statusCode)
+	}
+	return e.err.Error()
+}
+
+func (e apiStatusError) Unwrap() error {
+	return e.err
+}
+
+func (e apiStatusError) StatusCode() int {
+	return e.statusCode
 }
 
 // NewClient は Gmail API クライアントを初期化する。
@@ -130,15 +152,18 @@ type FetchRequest struct {
 	MaxResults int
 	LabelIDs   []string
 	Query      string
+	PageToken  string
 }
 
 // FetchResult は取得したメール一覧を返す。
 type FetchResult struct {
-	Messages []types.EmailSummary
+	Messages      []types.EmailSummary
+	NextPageToken string
 }
 
 type listMessagesResponse struct {
-	Messages []messageListItem `json:"messages"`
+	Messages      []messageListItem `json:"messages"`
+	NextPageToken string            `json:"nextPageToken"`
 }
 
 type messageListItem struct {
@@ -194,6 +219,9 @@ func (c *Client) FetchMessages(
 	if value := strings.TrimSpace(request.Query); value != "" {
 		query.Set("q", value)
 	}
+	if pageToken := strings.TrimSpace(request.PageToken); pageToken != "" {
+		query.Set("pageToken", pageToken)
+	}
 
 	path := messagesPath
 	if encoded := query.Encode(); encoded != "" {
@@ -215,10 +243,15 @@ func (c *Client) FetchMessages(
 
 	items := listed.Messages
 	if len(items) == 0 {
-		return FetchResult{Messages: nil}, nil
+		return FetchResult{
+			Messages:      nil,
+			NextPageToken: strings.TrimSpace(listed.NextPageToken),
+		}, nil
 	}
 
 	messages := make([]types.EmailSummary, 0, len(items))
+	detailFailures := 0
+	var firstDetailError error
 	for _, item := range items {
 		messageID := strings.TrimSpace(item.ID)
 		if messageID == "" {
@@ -239,7 +272,16 @@ func (c *Client) FetchMessages(
 			nil,
 			&detail,
 		); err != nil {
-			return FetchResult{}, err
+			statusCode, hasStatusCode := gmailAPIStatusCode(err)
+			if hasStatusCode && (statusCode == http.StatusNotFound || statusCode == http.StatusGone) {
+				continue
+			}
+			detailFailures++
+			if firstDetailError == nil {
+				firstDetailError = err
+			}
+			log.Printf("Gmail メール詳細取得に失敗したため対象をスキップします message_id=%s err=%v", messageID, err)
+			continue
 		}
 
 		threadID := strings.TrimSpace(detail.ThreadID)
@@ -256,7 +298,14 @@ func (c *Client) FetchMessages(
 		})
 	}
 
-	return FetchResult{Messages: messages}, nil
+	nextPageToken := strings.TrimSpace(listed.NextPageToken)
+	if len(messages) == 0 && detailFailures > 0 && firstDetailError != nil {
+		return FetchResult{}, fmt.Errorf("Gmail メール詳細の取得に失敗しました: %w", firstDetailError)
+	}
+	return FetchResult{
+		Messages:      messages,
+		NextPageToken: nextPageToken,
+	}, nil
 }
 
 func messageHeaderValue(headers []messageHeaderDTO, headerName string) string {
@@ -286,4 +335,28 @@ func messageHasLabel(labels []string, labelID string) bool {
 		}
 	}
 	return false
+}
+
+func gmailAPIStatusCode(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	var withStatus interface{ StatusCode() int }
+	if errors.As(err, &withStatus) {
+		statusCode := withStatus.StatusCode()
+		if statusCode >= 100 && statusCode <= 599 {
+			return statusCode, true
+		}
+	}
+
+	text := strings.ToLower(err.Error())
+	for statusCode := 100; statusCode <= 599; statusCode++ {
+		if strings.Contains(text, fmt.Sprintf("http %d", statusCode)) ||
+			strings.Contains(text, fmt.Sprintf("(%d)", statusCode)) {
+			return statusCode, true
+		}
+	}
+
+	return 0, false
 }
