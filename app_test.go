@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -753,6 +754,25 @@ func TestBuildSchedulerNotificationSkipsPassiveSkip(t *testing.T) {
 	}
 }
 
+func TestBuildSchedulerNotificationShowsMissingLastRunGuidance(t *testing.T) {
+	t.Parallel()
+
+	notification, ok := buildSchedulerNotification(scheduler.Event{
+		JobID: schedulerJobClassification,
+		Kind:  scheduler.EventKindSkipped,
+		Result: scheduler.Result{
+			Skipped: true,
+			Message: schedulerMessageMissingClassificationLastRun,
+		},
+	})
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if !strings.Contains(notification.Body, "last_run_at 未設定") {
+		t.Fatalf("Body = %q, want contains last_run guidance", notification.Body)
+	}
+}
+
 func TestBuildSchedulerNotificationAddsSettingsGuidanceOnCredentialError(t *testing.T) {
 	t.Parallel()
 
@@ -927,7 +947,410 @@ func TestRunScheduledBlocklistRegistersSuggestions(t *testing.T) {
 	}
 }
 
-func TestLogSchedulerEventStoresLastRunAtOnStarted(t *testing.T) {
+func TestRunScheduledClassificationSkipsWhenLastRunMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledClassification returned error: %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("result.Skipped = false, want true")
+	}
+	if result.Message != schedulerMessageMissingClassificationLastRun {
+		t.Fatalf("result.Message = %q, want %q", result.Message, schedulerMessageMissingClassificationLastRun)
+	}
+}
+
+func TestRunScheduledClassificationSkipsWhenCredentialsMissing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	runAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	if err := store.SetSetting(
+		ctx,
+		fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification),
+		runAt.Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("SetSetting(job last_run_at) returned error: %v", err)
+	}
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledClassification returned error: %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("result.Skipped = false, want true")
+	}
+	if !strings.Contains(result.Message, "Google トークンまたは Claude API キーが未設定") {
+		t.Fatalf("result.Message = %q, want contains credential guidance", result.Message)
+	}
+}
+
+func TestRunScheduledClassificationSkipsWhenNoNewMessages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	secretStore := auth.NewMemorySecretStore()
+	secretManager := auth.NewSecretManager(secretStore)
+	if err := secretManager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+	if err := secretManager.SaveClaudeAPIKey(ctx, "claude-api-key"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	lastRunAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	if err := store.SetSetting(
+		ctx,
+		fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification),
+		lastRunAt.Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("SetSetting(job last_run_at) returned error: %v", err)
+	}
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: secretManager,
+		gmailClient: gmail.NewClient(gmail.Options{
+			BaseURL: "https://gmail.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Path != "/gmail/v1/users/me/messages" {
+						t.Fatalf("unexpected URL path: %s", r.URL.Path)
+					}
+					if got := r.URL.Query().Get("q"); got != "after:1772960400" {
+						t.Fatalf("query q = %q, want %q", got, "after:1772960400")
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{"messages":[]}`)),
+					}, nil
+				}),
+			},
+		}),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledClassification returned error: %v", err)
+	}
+	if !result.Skipped {
+		t.Fatalf("result.Skipped = false, want true")
+	}
+	if !strings.Contains(result.Message, "新着メールはありませんでした") {
+		t.Fatalf("result.Message = %q, want contains no-new guidance", result.Message)
+	}
+}
+
+func TestBuildSchedulerClassificationQuery(t *testing.T) {
+	t.Parallel()
+
+	runAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	got := buildSchedulerClassificationQuery(runAt)
+	if got != "after:1772960400" {
+		t.Fatalf("query = %q, want %q", got, "after:1772960400")
+	}
+
+	if zero := buildSchedulerClassificationQuery(time.Time{}); zero != "" {
+		t.Fatalf("zero query = %q, want empty", zero)
+	}
+}
+
+func TestBuildSchedulerSafeRunDecisionsConvertsJunkAndCountsPending(t *testing.T) {
+	t.Parallel()
+
+	messages := []types.EmailSummary{
+		{ID: "m1", ThreadID: "t1", From: "a@example.com", Subject: "one"},
+		{ID: "m2", ThreadID: "t2", From: "b@example.com", Subject: "two"},
+		{ID: "m3", ThreadID: "t3", From: "c@example.com", Subject: "three"},
+	}
+	results := []types.ClassificationResult{
+		{
+			MessageID:   "m1",
+			Category:    types.ClassificationCategoryJunk,
+			Confidence:  0.95,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			Source:      types.ClassificationSourceClaude,
+		},
+		{
+			MessageID:   "m2",
+			Category:    types.ClassificationCategoryImportant,
+			Confidence:  0.80,
+			ReviewLevel: types.ClassificationReviewLevelReview,
+			Source:      types.ClassificationSourceClaude,
+		},
+		{
+			MessageID:   "m3",
+			Category:    types.ClassificationCategoryArchive,
+			Confidence:  0.91,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			Source:      types.ClassificationSourceBlocklist,
+		},
+	}
+
+	decisions, metadata, pendingApproval := buildSchedulerSafeRunDecisions(messages, results)
+	if pendingApproval != 1 {
+		t.Fatalf("pendingApproval = %d, want 1", pendingApproval)
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("len(decisions) = %d, want 2", len(decisions))
+	}
+	if decisions[0].Category != types.ClassificationCategoryArchive {
+		t.Fatalf("decisions[0].Category = %q, want %q", decisions[0].Category, types.ClassificationCategoryArchive)
+	}
+	if decisions[1].Category != types.ClassificationCategoryArchive {
+		t.Fatalf("decisions[1].Category = %q, want %q", decisions[1].Category, types.ClassificationCategoryArchive)
+	}
+	if len(metadata) != 2 {
+		t.Fatalf("len(metadata) = %d, want 2", len(metadata))
+	}
+	if metadata[0].Category != types.ClassificationCategoryArchive {
+		t.Fatalf("metadata[0].Category = %q, want %q", metadata[0].Category, types.ClassificationCategoryArchive)
+	}
+	if metadata[1].Source != types.ClassificationSourceBlocklist {
+		t.Fatalf("metadata[1].Source = %q, want %q", metadata[1].Source, types.ClassificationSourceBlocklist)
+	}
+}
+
+func TestRunScheduledClassificationPaginatesAllPages(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	secretStore := auth.NewMemorySecretStore()
+	secretManager := auth.NewSecretManager(secretStore)
+	if err := secretManager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+	if err := secretManager.SaveClaudeAPIKey(ctx, "claude-api-key"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	lastRunAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	if err := store.SetSetting(
+		ctx,
+		fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification),
+		lastRunAt.Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("SetSetting(job last_run_at) returned error: %v", err)
+	}
+
+	listCalls := 0
+	claudeCalls := 0
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: secretManager,
+		gmailClient: gmail.NewClient(gmail.Options{
+			BaseURL: "https://gmail.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					switch r.URL.Path {
+					case "/gmail/v1/users/me/messages":
+						listCalls++
+						query := r.URL.Query()
+						if got := query.Get("q"); got != "after:1772960400" {
+							t.Fatalf("q = %q, want %q", got, "after:1772960400")
+						}
+						switch listCalls {
+						case 1:
+							if token := query.Get("pageToken"); token != "" {
+								t.Fatalf("pageToken(1st) = %q, want empty", token)
+							}
+							return &http.Response{
+								StatusCode: http.StatusOK,
+								Header: http.Header{
+									"Content-Type": []string{"application/json"},
+								},
+								Body: io.NopCloser(strings.NewReader(`{
+									"messages":[{"id":"m1","threadId":"t1"}],
+									"nextPageToken":"page-2"
+								}`)),
+							}, nil
+						case 2:
+							if token := query.Get("pageToken"); token != "page-2" {
+								t.Fatalf("pageToken(2nd) = %q, want %q", token, "page-2")
+							}
+							return &http.Response{
+								StatusCode: http.StatusOK,
+								Header: http.Header{
+									"Content-Type": []string{"application/json"},
+								},
+								Body: io.NopCloser(strings.NewReader(`{
+									"messages":[{"id":"m2","threadId":"t2"}]
+								}`)),
+							}, nil
+						default:
+							t.Fatalf("unexpected list call count: %d", listCalls)
+							return nil, nil
+						}
+					case "/gmail/v1/users/me/messages/m1":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"id":"m1",
+								"threadId":"t1",
+								"snippet":"one",
+								"labelIds":["INBOX","UNREAD"],
+								"payload":{"headers":[{"name":"From","value":"one@example.com"},{"name":"Subject","value":"one"}]}
+							}`)),
+						}, nil
+					case "/gmail/v1/users/me/messages/m2":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"id":"m2",
+								"threadId":"t2",
+								"snippet":"two",
+								"labelIds":["INBOX"],
+								"payload":{"headers":[{"name":"From","value":"two@example.com"},{"name":"Subject","value":"two"}]}
+							}`)),
+						}, nil
+					default:
+						t.Fatalf("unexpected Gmail URL: %s", r.URL.String())
+						return nil, nil
+					}
+				}),
+			},
+		}),
+		claudeClient: claude.NewClient(claude.Options{
+			BaseURL: "https://claude.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Path != "/v1/messages" {
+						t.Fatalf("unexpected Claude URL: %s", r.URL.String())
+					}
+					claudeCalls++
+					var body string
+					switch claudeCalls {
+					case 1:
+						body = `{"content":[{"type":"text","text":"{\"results\":[{\"id\":\"m1\",\"category\":\"important\",\"confidence\":0.8,\"reason\":\"review\"}]}"}]}`
+					case 2:
+						body = `{"content":[{"type":"text","text":"{\"results\":[{\"id\":\"m2\",\"category\":\"newsletter\",\"confidence\":0.8,\"reason\":\"review\"}]}"}]}`
+					default:
+						t.Fatalf("unexpected Claude call count: %d", claudeCalls)
+						return nil, nil
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(body)),
+					}, nil
+				}),
+			},
+		}),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledClassification returned error: %v", err)
+	}
+	if result.Processed != 2 {
+		t.Fatalf("result.Processed = %d, want 2", result.Processed)
+	}
+	if result.PendingApproval != 2 {
+		t.Fatalf("result.PendingApproval = %d, want 2", result.PendingApproval)
+	}
+	if listCalls != 2 {
+		t.Fatalf("listCalls = %d, want 2", listCalls)
+	}
+	if claudeCalls != 2 {
+		t.Fatalf("claudeCalls = %d, want 2", claudeCalls)
+	}
+}
+
+func TestMaybeMarkSchedulerRetryableRecognizesParenthesizedStatus(t *testing.T) {
+	t.Parallel()
+
+	err := maybeMarkSchedulerRetryable(errors.New("Gmail API 取得に失敗しました (503): temporary"))
+	if !scheduler.IsRetryable(err) {
+		t.Fatalf("error should be retryable: %v", err)
+	}
+}
+
+func TestLogSchedulerEventStoresLastRunAtOnClassificationSucceeded(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -953,8 +1376,8 @@ func TestLogSchedulerEventStoresLastRunAtOnStarted(t *testing.T) {
 
 	runAt := time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC)
 	app.logSchedulerEvent(scheduler.Event{
-		JobID:   schedulerJobBlocklist,
-		Kind:    scheduler.EventKindStarted,
+		JobID:   schedulerJobClassification,
+		Kind:    scheduler.EventKindSucceeded,
 		Attempt: 1,
 		At:      runAt,
 	})
@@ -968,6 +1391,58 @@ func TestLogSchedulerEventStoresLastRunAtOnStarted(t *testing.T) {
 	}
 	if got != runAt.Format(time.RFC3339) {
 		t.Fatalf("lastRunAt = %q, want %q", got, runAt.Format(time.RFC3339))
+	}
+
+	jobKey := fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification)
+	gotJob, ok, err := store.GetSetting(ctx, jobKey)
+	if err != nil {
+		t.Fatalf("GetSetting(jobLastRunAt) returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("job last_run_at was not stored")
+	}
+	if gotJob != runAt.Format(time.RFC3339) {
+		t.Fatalf("job last_run_at = %q, want %q", gotJob, runAt.Format(time.RFC3339))
+	}
+}
+
+func TestLogSchedulerEventDoesNotStoreLastRunAtOnStarted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	app.logSchedulerEvent(scheduler.Event{
+		JobID:   schedulerJobClassification,
+		Kind:    scheduler.EventKindStarted,
+		Attempt: 1,
+		At:      time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC),
+	})
+
+	_, ok, err := store.GetSetting(ctx, schedulerSettingLastRunAt)
+	if err != nil {
+		t.Fatalf("GetSetting(lastRunAt) returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("schedulerSettingLastRunAt was stored on started event")
 	}
 }
 
@@ -1055,8 +1530,8 @@ func TestStartSchedulerSkipsUnimplementedJobs(t *testing.T) {
 	if app.schedulerSvc == nil {
 		t.Fatalf("schedulerSvc = nil, want non-nil")
 	}
-	if app.schedulerSvc.Trigger(schedulerJobClassification) {
-		t.Fatalf("Trigger(classification) = true, want false")
+	if !app.schedulerSvc.Trigger(schedulerJobClassification) {
+		t.Fatalf("Trigger(classification) = false, want true")
 	}
 	if app.schedulerSvc.Trigger(schedulerJobKnownBlock) {
 		t.Fatalf("Trigger(known_block) = true, want false")
