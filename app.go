@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -38,21 +39,43 @@ const (
 	maxSchedulerRetries                  = 3
 	schedulerRetryBackoffBase            = 2 * time.Second
 
-	schedulerSettingClassificationMinutes = "scheduler.classification.interval_minutes"
-	schedulerSettingBlocklistMinutes      = "scheduler.blocklist.interval_minutes"
-	schedulerSettingKnownBlockMinutes     = "scheduler.known_block.interval_minutes"
-	schedulerSettingNotificationsEnabled  = "scheduler.notifications.enabled"
-	schedulerSettingLastRunAt             = "scheduler.last_run_at"
-	schedulerSettingLastRunTemplate       = "scheduler.%s.last_run_at"
+	schedulerSettingClassificationMinutes    = "scheduler.classification.interval_minutes"
+	schedulerSettingBlocklistMinutes         = "scheduler.blocklist.interval_minutes"
+	schedulerSettingKnownBlockMinutes        = "scheduler.known_block.interval_minutes"
+	schedulerSettingNotificationsEnabled     = "scheduler.notifications.enabled"
+	schedulerSettingLastRunAt                = "scheduler.last_run_at"
+	schedulerSettingLastRunTemplate          = "scheduler.%s.last_run_at"
+	schedulerSettingClassificationCheckpoint = "scheduler.classification.checkpoint"
 
 	schedulerJobClassification = "classification_daily"
 	schedulerJobBlocklist      = "blocklist_daily"
 	schedulerJobKnownBlock     = "known_block_30m"
 
+	schedulerCheckpointRunTypeScheduled = "scheduled"
+	schedulerCheckpointModeSafeRun      = "safe-run"
+
 	schedulerMessageMissingClassificationLastRun = "last_run_at 未設定のため、定期 safe-run は backlog 全量を自動実行しません。Classify 画面で手動実行して開始時刻を確定してください。"
 
 	schedulerNotificationEventName = "scheduler:notification"
 )
+
+type classificationCheckpoint struct {
+	RunType          string   `json:"run_type"`
+	Mode             string   `json:"mode"`
+	LastRunAt        string   `json:"last_run_at"`
+	Query            string   `json:"query"`
+	LabelIDs         []string `json:"label_ids"`
+	BatchSize        int      `json:"batch_size"`
+	CompletedBatches int      `json:"completed_batches"`
+	Processed        int      `json:"processed"`
+	Success          int      `json:"success"`
+	Failed           int      `json:"failed"`
+	PendingApproval  int      `json:"pending_approval"`
+	Skipped          int      `json:"skipped"`
+	LastStopReason   string   `json:"last_stop_reason,omitempty"`
+	LastError        string   `json:"last_error,omitempty"`
+	UpdatedAt        string   `json:"updated_at"`
+}
 
 type App struct {
 	ctx           context.Context
@@ -1367,15 +1390,31 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	}
 
 	fetchQuery := buildSchedulerClassificationQuery(*lastRunAt)
+	labelIDs := []string{"INBOX"}
+	checkpoint, hasCheckpoint := a.loadClassificationCheckpoint(
+		*lastRunAt,
+		fetchQuery,
+		labelIDs,
+	)
+	if !hasCheckpoint {
+		checkpoint = newClassificationCheckpoint(*lastRunAt, fetchQuery, labelIDs)
+	}
+	initialCompletedBatches := checkpoint.CompletedBatches
 	pageToken := ""
 	pageCount := 0
 	fetchedCount := 0
-	aggregated := scheduler.Result{}
+	aggregated := scheduler.Result{
+		Processed:       checkpoint.Processed,
+		Success:         checkpoint.Success,
+		Failed:          checkpoint.Failed,
+		PendingApproval: checkpoint.PendingApproval,
+	}
+	completedBatches := checkpoint.CompletedBatches
 
 	for {
 		fetched, err := a.gmailClient.FetchMessages(ctx, token.AccessToken, gmail.FetchRequest{
 			MaxResults: types.ClassificationMaxBatchSize,
-			LabelIDs:   []string{"INBOX"},
+			LabelIDs:   labelIDs,
 			Query:      fetchQuery,
 			PageToken:  pageToken,
 		})
@@ -1388,14 +1427,41 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		pageCount++
 		messages := fetched.Messages
 		fetchedCount += len(messages)
+		if completedBatches > 0 {
+			completedBatches--
+			nextPageToken := strings.TrimSpace(fetched.NextPageToken)
+			if nextPageToken == "" {
+				break
+			}
+			pageToken = nextPageToken
+			continue
+		}
 
 		pageResult, err := a.runScheduledClassificationPage(messages)
+		if err != nil {
+			failed := aggregated
+			failed.Processed += pageResult.Processed
+			failed.Success += pageResult.Success
+			failed.Failed += pageResult.Failed
+			failed.PendingApproval += pageResult.PendingApproval
+			return failed, maybeMarkSchedulerRetryable(err)
+		}
+
 		aggregated.Processed += pageResult.Processed
 		aggregated.Success += pageResult.Success
 		aggregated.Failed += pageResult.Failed
 		aggregated.PendingApproval += pageResult.PendingApproval
-		if err != nil {
-			return aggregated, maybeMarkSchedulerRetryable(err)
+		checkpoint.CompletedBatches++
+		checkpoint.Processed = aggregated.Processed
+		checkpoint.Success = aggregated.Success
+		checkpoint.Failed = aggregated.Failed
+		checkpoint.PendingApproval = aggregated.PendingApproval
+		checkpoint.Skipped += schedulerResultSkippedCount(pageResult)
+		checkpoint.LastStopReason = ""
+		checkpoint.LastError = ""
+		checkpoint.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := a.saveClassificationCheckpoint(checkpoint); err != nil {
+			return aggregated, fmt.Errorf("分類 checkpoint を保存できませんでした: %w", err)
 		}
 
 		nextPageToken := strings.TrimSpace(fetched.NextPageToken)
@@ -1405,7 +1471,7 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		pageToken = nextPageToken
 	}
 
-	if fetchedCount == 0 {
+	if fetchedCount == 0 && aggregated.Processed == 0 {
 		return scheduler.Result{
 			Skipped: true,
 			Message: fmt.Sprintf(
@@ -1416,14 +1482,30 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	}
 
 	aggregated.Message = fmt.Sprintf(
-		"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+		"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。%s",
 		fetchedCount,
 		pageCount,
 		aggregated.Success,
 		aggregated.Failed,
 		aggregated.PendingApproval,
+		strings.TrimSpace(buildCheckpointResumeMessage(initialCompletedBatches)),
 	)
 	return aggregated, nil
+}
+
+func schedulerResultSkippedCount(result scheduler.Result) int {
+	skipped := result.Processed - result.Success - result.Failed - result.PendingApproval
+	if skipped < 0 {
+		return 0
+	}
+	return skipped
+}
+
+func buildCheckpointResumeMessage(completedBatches int) string {
+	if completedBatches <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("checkpoint から %d バッチ再開しました。", completedBatches)
 }
 
 func (a *App) runScheduledBlocklist(ctx context.Context) (scheduler.Result, error) {
@@ -1742,6 +1824,185 @@ func parseSchedulerRunAt(value string) *time.Time {
 	return &lastRunAt
 }
 
+func newClassificationCheckpoint(
+	lastRunAt time.Time,
+	fetchQuery string,
+	labelIDs []string,
+) classificationCheckpoint {
+	normalizedLabels := make([]string, 0, len(labelIDs))
+	for _, labelID := range labelIDs {
+		trimmed := strings.TrimSpace(labelID)
+		if trimmed == "" {
+			continue
+		}
+		normalizedLabels = append(normalizedLabels, trimmed)
+	}
+
+	return classificationCheckpoint{
+		RunType:   schedulerCheckpointRunTypeScheduled,
+		Mode:      schedulerCheckpointModeSafeRun,
+		LastRunAt: lastRunAt.UTC().Format(time.RFC3339),
+		Query:     strings.TrimSpace(fetchQuery),
+		LabelIDs:  normalizedLabels,
+		BatchSize: types.ClassificationMaxBatchSize,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func (a *App) loadClassificationCheckpoint(
+	lastRunAt time.Time,
+	fetchQuery string,
+	labelIDs []string,
+) (classificationCheckpoint, bool) {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return classificationCheckpoint{}, false
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	value, ok, err := store.GetSetting(ctx, schedulerSettingClassificationCheckpoint)
+	if err != nil || !ok {
+		return classificationCheckpoint{}, false
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return classificationCheckpoint{}, false
+	}
+
+	var checkpoint classificationCheckpoint
+	if err := json.Unmarshal([]byte(trimmed), &checkpoint); err != nil {
+		log.Printf("分類 checkpoint の形式が不正です: %v", err)
+		return classificationCheckpoint{}, false
+	}
+
+	if checkpoint.RunType != schedulerCheckpointRunTypeScheduled ||
+		checkpoint.Mode != schedulerCheckpointModeSafeRun ||
+		checkpoint.Query != strings.TrimSpace(fetchQuery) ||
+		checkpoint.LastRunAt != lastRunAt.UTC().Format(time.RFC3339) ||
+		!sameStrings(checkpoint.LabelIDs, labelIDs) {
+		return classificationCheckpoint{}, false
+	}
+	if checkpoint.CompletedBatches < 0 ||
+		checkpoint.Processed < 0 ||
+		checkpoint.Success < 0 ||
+		checkpoint.Failed < 0 ||
+		checkpoint.PendingApproval < 0 ||
+		checkpoint.Skipped < 0 {
+		return classificationCheckpoint{}, false
+	}
+	if checkpoint.BatchSize <= 0 {
+		checkpoint.BatchSize = types.ClassificationMaxBatchSize
+	}
+
+	return checkpoint, true
+}
+
+func (a *App) saveClassificationCheckpoint(checkpoint classificationCheckpoint) error {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		return fmt.Errorf("分類 checkpoint の JSON 変換に失敗しました: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if err := store.SetSetting(ctx, schedulerSettingClassificationCheckpoint, string(data)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *App) clearClassificationCheckpoint() error {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if err := store.SetSetting(ctx, schedulerSettingClassificationCheckpoint, ""); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *App) updateClassificationCheckpointFailure(event scheduler.Event) error {
+	if strings.TrimSpace(event.JobID) != schedulerJobClassification {
+		return nil
+	}
+
+	store, err := a.requireDBStore()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	value, ok, err := store.GetSetting(ctx, schedulerSettingClassificationCheckpoint)
+	if err != nil || !ok {
+		return err
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+
+	var checkpoint classificationCheckpoint
+	if err := json.Unmarshal([]byte(trimmed), &checkpoint); err != nil {
+		return fmt.Errorf("分類 checkpoint の読み出しに失敗しました: %w", err)
+	}
+
+	checkpoint.LastStopReason = schedulerStopReason(event)
+	if event.Err != nil {
+		checkpoint.LastError = strings.TrimSpace(event.Err.Error())
+	}
+	checkpoint.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		return fmt.Errorf("分類 checkpoint の JSON 変換に失敗しました: %w", err)
+	}
+	if err := store.SetSetting(ctx, schedulerSettingClassificationCheckpoint, string(data)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sameStrings(left []string, right []string) bool {
+	leftNormalized := normalizedStrings(left)
+	rightNormalized := normalizedStrings(right)
+	if len(leftNormalized) != len(rightNormalized) {
+		return false
+	}
+	for index := range leftNormalized {
+		if leftNormalized[index] != rightNormalized[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizedStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
+}
+
 func (a *App) logSchedulerEvent(event scheduler.Event) {
 	switch event.Kind {
 	case scheduler.EventKindStarted:
@@ -1755,6 +2016,11 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 			event.Err,
 		)
 	case scheduler.EventKindSucceeded:
+		if strings.TrimSpace(event.JobID) == schedulerJobClassification {
+			if err := a.clearClassificationCheckpoint(); err != nil {
+				log.Printf("[scheduler] job=%s checkpoint クリアに失敗しました: %v", event.JobID, err)
+			}
+		}
 		if err := a.saveSchedulerLastRun(
 			event.JobID,
 			event.At,
@@ -1778,6 +2044,11 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 	case scheduler.EventKindOverlapSkipped:
 		log.Printf("[scheduler] job=%s skipped because previous run is still active", event.JobID)
 	case scheduler.EventKindFailed:
+		if strings.TrimSpace(event.JobID) == schedulerJobClassification {
+			if err := a.updateClassificationCheckpointFailure(event); err != nil {
+				log.Printf("[scheduler] job=%s checkpoint 更新に失敗しました: %v", event.JobID, err)
+			}
+		}
 		log.Printf(
 			"[scheduler] job=%s failed attempt=%d/%d err=%v",
 			event.JobID,
