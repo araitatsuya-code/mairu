@@ -32,11 +32,12 @@ const (
 
 // Result はジョブ実行結果の概要を表す。
 type Result struct {
-	Processed int
-	Success   int
-	Failed    int
-	Skipped   bool
-	Message   string
+	Processed       int
+	Success         int
+	Failed          int
+	PendingApproval int
+	Skipped         bool
+	Message         string
 }
 
 // Handler は 1 ジョブ分の実処理を表す。
