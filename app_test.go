@@ -13,6 +13,7 @@ import (
 	"mairu/internal/claude"
 	"mairu/internal/db"
 	"mairu/internal/gmail"
+	"mairu/internal/scheduler"
 	"mairu/internal/types"
 )
 
@@ -598,6 +599,237 @@ func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 	}
 	if stored.AccessToken != "fresh-access-token" {
 		t.Fatalf("stored AccessToken = %q, want %q", stored.AccessToken, "fresh-access-token")
+	}
+}
+
+func TestGetRuntimeStatusReadsSchedulerLastRunAt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	want := time.Date(2026, time.March, 7, 9, 30, 0, 0, time.UTC)
+	if err := store.SetSetting(ctx, schedulerSettingLastRunAt, want.Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetSetting returned error: %v", err)
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{ClientID: "client-id", ClientSecret: "client-secret"}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	status := app.GetRuntimeStatus()
+	if status.LastRunAt == nil {
+		t.Fatalf("LastRunAt = nil, want non-nil")
+	}
+	if !status.LastRunAt.Equal(want) {
+		t.Fatalf("LastRunAt = %s, want %s", status.LastRunAt.UTC().Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+}
+
+func TestRunScheduledBlocklistRegistersSuggestions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	for i := 0; i < 3; i++ {
+		if err := store.RecordClassificationCorrection(ctx, types.ClassificationCorrection{
+			MessageID:         "msg-sender",
+			Sender:            "promo@example.com",
+			OriginalCategory:  types.ClassificationCategoryNewsletter,
+			CorrectedCategory: types.ClassificationCategoryJunk,
+		}); err != nil {
+			t.Fatalf("RecordClassificationCorrection returned error: %v", err)
+		}
+	}
+
+	app := &App{
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledBlocklist(ctx)
+	if err != nil {
+		t.Fatalf("runScheduledBlocklist returned error: %v", err)
+	}
+	if result.Success != 1 {
+		t.Fatalf("result.Success = %d, want 1", result.Success)
+	}
+	if result.Processed != 1 {
+		t.Fatalf("result.Processed = %d, want 1", result.Processed)
+	}
+
+	entries, err := store.ListBlocklistEntries(ctx)
+	if err != nil {
+		t.Fatalf("ListBlocklistEntries returned error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].Pattern != "promo@example.com" {
+		t.Fatalf("entries[0].Pattern = %q, want %q", entries[0].Pattern, "promo@example.com")
+	}
+}
+
+func TestLogSchedulerEventStoresLastRunAtOnStarted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	runAt := time.Date(2026, time.March, 8, 12, 34, 56, 0, time.UTC)
+	app.logSchedulerEvent(scheduler.Event{
+		JobID:   schedulerJobBlocklist,
+		Kind:    scheduler.EventKindStarted,
+		Attempt: 1,
+		At:      runAt,
+	})
+
+	got, ok, err := store.GetSetting(ctx, schedulerSettingLastRunAt)
+	if err != nil {
+		t.Fatalf("GetSetting(lastRunAt) returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("schedulerSettingLastRunAt was not stored")
+	}
+	if got != runAt.Format(time.RFC3339) {
+		t.Fatalf("lastRunAt = %q, want %q", got, runAt.Format(time.RFC3339))
+	}
+}
+
+func TestStartSchedulerAllowsManualTrigger(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+	t.Cleanup(app.stopScheduler)
+
+	called := make(chan struct{}, 1)
+	app.runScheduledClassificationJob = func(context.Context) (scheduler.Result, error) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		return scheduler.Result{Skipped: true, Message: "test"}, nil
+	}
+
+	if err := app.startScheduler(); err != nil {
+		t.Fatalf("startScheduler returned error: %v", err)
+	}
+
+	if app.schedulerSvc == nil {
+		t.Fatalf("schedulerSvc = nil, want non-nil")
+	}
+	if !app.schedulerSvc.Trigger(schedulerJobClassification) {
+		t.Fatalf("Trigger(classification) = false, want true")
+	}
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatalf("manual trigger timeout")
+	}
+}
+
+func TestStartSchedulerSkipsUnimplementedJobs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		dbStore:       store,
+		databaseReady: true,
+	}
+	t.Cleanup(app.stopScheduler)
+
+	if err := app.startScheduler(); err != nil {
+		t.Fatalf("startScheduler returned error: %v", err)
+	}
+
+	if app.schedulerSvc == nil {
+		t.Fatalf("schedulerSvc = nil, want non-nil")
+	}
+	if app.schedulerSvc.Trigger(schedulerJobClassification) {
+		t.Fatalf("Trigger(classification) = true, want false")
+	}
+	if app.schedulerSvc.Trigger(schedulerJobKnownBlock) {
+		t.Fatalf("Trigger(known_block) = true, want false")
+	}
+	if !app.schedulerSvc.Trigger(schedulerJobBlocklist) {
+		t.Fatalf("Trigger(blocklist) = false, want true")
 	}
 }
 
