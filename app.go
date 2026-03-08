@@ -1065,30 +1065,40 @@ func (a *App) startScheduler() error {
 		defaultKnownBlockProcessMinutes,
 	)
 
-	service, err := scheduler.New(scheduler.Options{
-		Jobs: []scheduler.Job{
-			{
-				ID:           schedulerJobClassification,
-				Interval:     classificationInterval,
-				MaxRetries:   maxSchedulerRetries,
-				RetryBackoff: schedulerRetryBackoffBase,
-				Handler:      a.runScheduledClassification,
-			},
-			{
-				ID:           schedulerJobBlocklist,
-				Interval:     blocklistInterval,
-				MaxRetries:   maxSchedulerRetries,
-				RetryBackoff: schedulerRetryBackoffBase,
-				Handler:      a.runScheduledBlocklist,
-			},
-			{
-				ID:           schedulerJobKnownBlock,
-				Interval:     knownBlockInterval,
-				MaxRetries:   maxSchedulerRetries,
-				RetryBackoff: schedulerRetryBackoffBase,
-				Handler:      a.runScheduledKnownBlock,
-			},
+	jobs := []scheduler.Job{
+		{
+			ID:           schedulerJobBlocklist,
+			Interval:     blocklistInterval,
+			MaxRetries:   maxSchedulerRetries,
+			RetryBackoff: schedulerRetryBackoffBase,
+			Handler:      a.runScheduledBlocklist,
 		},
+	}
+	if a.runScheduledClassificationJob != nil {
+		jobs = append(jobs, scheduler.Job{
+			ID:           schedulerJobClassification,
+			Interval:     classificationInterval,
+			MaxRetries:   maxSchedulerRetries,
+			RetryBackoff: schedulerRetryBackoffBase,
+			Handler:      a.runScheduledClassification,
+		})
+	} else {
+		log.Printf("[scheduler] job=%s は未実装のため登録をスキップしました", schedulerJobClassification)
+	}
+	if a.runScheduledKnownBlockJob != nil {
+		jobs = append(jobs, scheduler.Job{
+			ID:           schedulerJobKnownBlock,
+			Interval:     knownBlockInterval,
+			MaxRetries:   maxSchedulerRetries,
+			RetryBackoff: schedulerRetryBackoffBase,
+			Handler:      a.runScheduledKnownBlock,
+		})
+	} else {
+		log.Printf("[scheduler] job=%s は未実装のため登録をスキップしました", schedulerJobKnownBlock)
+	}
+
+	service, err := scheduler.New(scheduler.Options{
+		Jobs:    jobs,
 		OnEvent: a.logSchedulerEvent,
 	})
 	if err != nil {
@@ -1174,9 +1184,6 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		result.Message = "Google トークンまたは Claude API キーが未設定のため、自動分類ジョブをスキップしました。"
 	}
 
-	if err := a.saveSchedulerLastRun(ctx, schedulerJobClassification); err != nil {
-		return scheduler.Result{}, err
-	}
 	return result, nil
 }
 
@@ -1209,10 +1216,6 @@ func (a *App) runScheduledBlocklist(ctx context.Context) (scheduler.Result, erro
 		imported++
 	}
 
-	if err := a.saveSchedulerLastRun(ctx, schedulerJobBlocklist); err != nil {
-		return scheduler.Result{}, err
-	}
-
 	if imported == 0 {
 		return scheduler.Result{
 			Skipped: true,
@@ -1242,9 +1245,6 @@ func (a *App) runScheduledKnownBlock(ctx context.Context) (scheduler.Result, err
 		return scheduler.Result{}, fmt.Errorf("既知ブロック処理の準備に失敗しました: %w", err)
 	}
 	if len(entries) == 0 {
-		if err := a.saveSchedulerLastRun(ctx, schedulerJobKnownBlock); err != nil {
-			return scheduler.Result{}, err
-		}
 		return scheduler.Result{
 			Skipped: true,
 			Message: "ブロックリストが空のため、既知ブロック処理をスキップしました。",
@@ -1256,31 +1256,37 @@ func (a *App) runScheduledKnownBlock(ctx context.Context) (scheduler.Result, err
 		return scheduler.Result{}, fmt.Errorf("Google トークン状態を確認できませんでした: %w", err)
 	}
 	if !hasGoogleToken {
-		if err := a.saveSchedulerLastRun(ctx, schedulerJobKnownBlock); err != nil {
-			return scheduler.Result{}, err
-		}
 		return scheduler.Result{
 			Skipped: true,
 			Message: "Google トークン未設定のため、既知ブロック処理をスキップしました。",
 		}, nil
 	}
 
-	if err := a.saveSchedulerLastRun(ctx, schedulerJobKnownBlock); err != nil {
-		return scheduler.Result{}, err
-	}
 	return scheduler.Result{
 		Skipped: true,
 		Message: "既知ブロック送信者の自動処理基盤を起動し、次フェーズの Gmail 取得処理に備えました。",
 	}, nil
 }
 
-func (a *App) saveSchedulerLastRun(ctx context.Context, jobID string) error {
+func (a *App) saveSchedulerLastRun(jobID string, runAt time.Time) error {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return errors.New("scheduler job ID が空です")
+	}
+
 	store, err := a.requireDBStore()
 	if err != nil {
 		return err
 	}
 
-	lastRunAt := time.Now().UTC().Format(time.RFC3339)
+	if runAt.IsZero() {
+		runAt = time.Now().UTC()
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	lastRunAt := runAt.UTC().Format(time.RFC3339)
 	if err := store.SetSetting(ctx, schedulerSettingLastRunAt, lastRunAt); err != nil {
 		return fmt.Errorf("scheduler 最終実行時刻を保存できませんでした: %w", err)
 	}
@@ -1317,6 +1323,9 @@ func (a *App) loadSchedulerLastRunAt() *time.Time {
 func (a *App) logSchedulerEvent(event scheduler.Event) {
 	switch event.Kind {
 	case scheduler.EventKindStarted:
+		if err := a.saveSchedulerLastRun(event.JobID, event.At); err != nil {
+			log.Printf("[scheduler] job=%s last_run 保存に失敗しました: %v", event.JobID, err)
+		}
 		log.Printf("[scheduler] job=%s attempt=%d started", event.JobID, event.Attempt)
 	case scheduler.EventKindRetryScheduled:
 		log.Printf(

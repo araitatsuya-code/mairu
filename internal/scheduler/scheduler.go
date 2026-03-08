@@ -161,14 +161,19 @@ func (s *Service) Start(parent context.Context) error {
 		s.mu.Unlock()
 		return errors.New("scheduler はすでに起動済みです")
 	}
+
 	ctx, cancel := context.WithCancel(parent)
+	runners := make([]*jobRunner, 0, len(s.jobs))
+	for _, runner := range s.jobs {
+		runners = append(runners, runner)
+	}
+	s.workers.Add(len(runners))
 	s.cancel = cancel
 	s.started = true
 	s.mu.Unlock()
 
-	for _, runner := range s.jobs {
+	for _, runner := range runners {
 		r := runner
-		s.workers.Add(1)
 		go func() {
 			defer s.workers.Done()
 			s.runWorker(ctx, r)
