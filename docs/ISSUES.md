@@ -41,7 +41,7 @@
 | MAIRU-016 | #36 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
 | MAIRU-017 | #37 | backlog | v2+ | AI アシスタント機能 | MAIRU-014 |
 | MAIRU-018 | #38 | done | Phase 2 | 大量メール耐性と段階実行の要件定義 | MAIRU-009 |
-| MAIRU-019 | #39 | ready | Phase 4 | 新着 safe-run 日次実行と `last_run_at` 管理 | MAIRU-013, MAIRU-018 |
+| MAIRU-019 | #39 | in progress | Phase 4 | 新着 safe-run 日次実行と `last_run_at` 管理 | MAIRU-013, MAIRU-018 |
 | MAIRU-020 | #40 | ready | Phase 4 | 50 件バッチ checkpoint 保存と再開 | MAIRU-010, MAIRU-013, MAIRU-018 |
 | MAIRU-021 | #41 | ready | Phase 4 | `action_logs` ベースの Gmail アクション重複防止 | MAIRU-009, MAIRU-010, MAIRU-018 |
 | MAIRU-022 | #42 | blocked | Phase 4 | 手動 backlog 実行の件数上限と再開導線 | MAIRU-019, MAIRU-020, MAIRU-021 |
@@ -309,7 +309,7 @@
   - 100 件 / 1,000 件 / 14,000 件想定の検証観点が揃う
 
 ### MAIRU-019: 新着 safe-run 日次実行と `last_run_at` 管理
-- 状態: `ready`
+- 状態: `in progress`
 - フェーズ: Phase 4
 - GitHub: `#39`
 - 依存: `MAIRU-013`, `MAIRU-018`

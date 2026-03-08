@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"mairu/internal/types"
 )
 
 const (
-	defaultBaseURL = "https://gmail.googleapis.com"
-	profilePath    = "/gmail/v1/users/me/profile"
+	defaultBaseURL     = "https://gmail.googleapis.com"
+	profilePath        = "/gmail/v1/users/me/profile"
+	messagesPath       = "/gmail/v1/users/me/messages"
+	messageDetailPath  = "/gmail/v1/users/me/messages/%s"
+	defaultFetchResult = types.ClassificationMaxBatchSize
+	maxFetchResult     = 500
 )
 
 // Options は Gmail API クライアント生成時の設定をまとめる。
@@ -123,9 +129,161 @@ func (c *Client) CheckConnection(ctx context.Context, accessToken string) (Profi
 type FetchRequest struct {
 	MaxResults int
 	LabelIDs   []string
+	Query      string
 }
 
 // FetchResult は取得したメール一覧を返す。
 type FetchResult struct {
 	Messages []types.EmailSummary
+}
+
+type listMessagesResponse struct {
+	Messages []messageListItem `json:"messages"`
+}
+
+type messageListItem struct {
+	ID       string `json:"id"`
+	ThreadID string `json:"threadId"`
+}
+
+type messageDetailResponse struct {
+	ID       string            `json:"id"`
+	ThreadID string            `json:"threadId"`
+	Snippet  string            `json:"snippet"`
+	LabelIDs []string          `json:"labelIds"`
+	Payload  messagePayloadDTO `json:"payload"`
+}
+
+type messagePayloadDTO struct {
+	Headers []messageHeaderDTO `json:"headers"`
+}
+
+type messageHeaderDTO struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// FetchMessages は label/query 条件で Gmail メールを取得する。
+func (c *Client) FetchMessages(
+	ctx context.Context,
+	accessToken string,
+	request FetchRequest,
+) (FetchResult, error) {
+	trimmedToken := strings.TrimSpace(accessToken)
+	if trimmedToken == "" {
+		return FetchResult{}, fmt.Errorf("Gmail API 呼び出しに必要な access token がありません")
+	}
+
+	maxResults := request.MaxResults
+	if maxResults <= 0 {
+		maxResults = defaultFetchResult
+	}
+	if maxResults > maxFetchResult {
+		maxResults = maxFetchResult
+	}
+
+	query := url.Values{}
+	query.Set("maxResults", strconv.Itoa(maxResults))
+	for _, labelID := range request.LabelIDs {
+		trimmedLabelID := strings.TrimSpace(labelID)
+		if trimmedLabelID == "" {
+			continue
+		}
+		query.Add("labelIds", trimmedLabelID)
+	}
+	if value := strings.TrimSpace(request.Query); value != "" {
+		query.Set("q", value)
+	}
+
+	path := messagesPath
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+
+	var listed listMessagesResponse
+	if err := c.doJSONRequest(
+		ctx,
+		http.MethodGet,
+		path,
+		trimmedToken,
+		"メール一覧取得",
+		nil,
+		&listed,
+	); err != nil {
+		return FetchResult{}, err
+	}
+
+	items := listed.Messages
+	if len(items) == 0 {
+		return FetchResult{Messages: nil}, nil
+	}
+
+	messages := make([]types.EmailSummary, 0, len(items))
+	for _, item := range items {
+		messageID := strings.TrimSpace(item.ID)
+		if messageID == "" {
+			continue
+		}
+
+		var detail messageDetailResponse
+		detailPath := fmt.Sprintf(
+			"%s?format=metadata&metadataHeaders=From&metadataHeaders=Subject",
+			fmt.Sprintf(messageDetailPath, url.PathEscape(messageID)),
+		)
+		if err := c.doJSONRequest(
+			ctx,
+			http.MethodGet,
+			detailPath,
+			trimmedToken,
+			"メール詳細取得",
+			nil,
+			&detail,
+		); err != nil {
+			return FetchResult{}, err
+		}
+
+		threadID := strings.TrimSpace(detail.ThreadID)
+		if threadID == "" {
+			threadID = strings.TrimSpace(item.ThreadID)
+		}
+		messages = append(messages, types.EmailSummary{
+			ID:       messageID,
+			ThreadID: threadID,
+			From:     messageHeaderValue(detail.Payload.Headers, "From"),
+			Subject:  messageHeaderValue(detail.Payload.Headers, "Subject"),
+			Snippet:  strings.TrimSpace(detail.Snippet),
+			Unread:   messageHasLabel(detail.LabelIDs, systemLabelUnread),
+		})
+	}
+
+	return FetchResult{Messages: messages}, nil
+}
+
+func messageHeaderValue(headers []messageHeaderDTO, headerName string) string {
+	target := strings.ToLower(strings.TrimSpace(headerName))
+	if target == "" {
+		return ""
+	}
+
+	for _, header := range headers {
+		name := strings.ToLower(strings.TrimSpace(header.Name))
+		if name != target {
+			continue
+		}
+		return strings.TrimSpace(header.Value)
+	}
+	return ""
+}
+
+func messageHasLabel(labels []string, labelID string) bool {
+	target := strings.TrimSpace(labelID)
+	if target == "" {
+		return false
+	}
+	for _, label := range labels {
+		if strings.TrimSpace(label) == target {
+			return true
+		}
+	}
+	return false
 }

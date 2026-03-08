@@ -49,6 +49,8 @@ const (
 	schedulerJobBlocklist      = "blocklist_daily"
 	schedulerJobKnownBlock     = "known_block_30m"
 
+	schedulerMessageMissingClassificationLastRun = "last_run_at 未設定のため、定期 safe-run は backlog 全量を自動実行しません。Classify 画面で手動実行して開始時刻を確定してください。"
+
 	schedulerNotificationEventName = "scheduler:notification"
 )
 
@@ -1189,17 +1191,13 @@ func (a *App) startScheduler() error {
 			RetryBackoff: schedulerRetryBackoffBase,
 			Handler:      a.runScheduledBlocklist,
 		},
-	}
-	if a.runScheduledClassificationJob != nil {
-		jobs = append(jobs, scheduler.Job{
+		{
 			ID:           schedulerJobClassification,
 			Interval:     classificationInterval,
 			MaxRetries:   maxSchedulerRetries,
 			RetryBackoff: schedulerRetryBackoffBase,
 			Handler:      a.runScheduledClassification,
-		})
-	} else {
-		log.Printf("[scheduler] job=%s は未実装のため登録をスキップしました", schedulerJobClassification)
+		},
 	}
 	if a.runScheduledKnownBlockJob != nil {
 		jobs = append(jobs, scheduler.Job{
@@ -1331,6 +1329,14 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		return a.runScheduledClassificationJob(ctx)
 	}
 
+	lastRunAt := a.loadSchedulerJobLastRunAt(schedulerJobClassification)
+	if lastRunAt == nil {
+		return scheduler.Result{
+			Skipped: true,
+			Message: schedulerMessageMissingClassificationLastRun,
+		}, nil
+	}
+
 	hasGoogleToken, err := a.secretManager.HasGoogleToken(ctx)
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("Google トークン状態を確認できませんでした: %w", err)
@@ -1339,15 +1345,109 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	if err != nil {
 		return scheduler.Result{}, fmt.Errorf("Claude API キー状態を確認できませんでした: %w", err)
 	}
+	if !hasGoogleToken || !hasClaudeKey {
+		return scheduler.Result{
+			Skipped: true,
+			Message: "Google トークンまたは Claude API キーが未設定のため、自動分類ジョブをスキップしました。",
+		}, nil
+	}
+
+	token, err := a.secretManager.LoadGoogleToken(ctx)
+	if err != nil {
+		return scheduler.Result{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+	token, refreshed, err := a.authClient.EnsureValidToken(ctx, token)
+	if err != nil {
+		return scheduler.Result{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(ctx, token); err != nil {
+			return scheduler.Result{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	fetchQuery := buildSchedulerClassificationQuery(*lastRunAt)
+	fetched, err := a.gmailClient.FetchMessages(ctx, token.AccessToken, gmail.FetchRequest{
+		MaxResults: types.ClassificationMaxBatchSize,
+		LabelIDs:   []string{"INBOX"},
+		Query:      fetchQuery,
+	})
+	if err != nil {
+		return scheduler.Result{}, maybeMarkSchedulerRetryable(
+			fmt.Errorf("新着メール取得に失敗しました: %w", err),
+		)
+	}
+	if len(fetched.Messages) == 0 {
+		return scheduler.Result{
+			Skipped: true,
+			Message: fmt.Sprintf(
+				"last_run_at(%s) 以降の新着メールはありませんでした。",
+				lastRunAt.Format(time.RFC3339),
+			),
+		}, nil
+	}
+
+	classification, err := a.ClassifyEmails(types.ClassificationRequest{
+		Messages: fetched.Messages,
+	})
+	if err != nil {
+		return scheduler.Result{}, maybeMarkSchedulerRetryable(
+			fmt.Errorf("新着メール分類に失敗しました: %w", err),
+		)
+	}
+	if len(classification.Results) == 0 {
+		return scheduler.Result{
+			Skipped: true,
+			Message: "新着メールの分類結果が空のため、safe-run 反映をスキップしました。",
+		}, nil
+	}
+
+	decisions, metadata, pendingApproval := buildSchedulerSafeRunDecisions(
+		fetched.Messages,
+		classification.Results,
+	)
 
 	result := scheduler.Result{
-		Skipped: true,
-		Message: "自動分類ジョブは実行条件の確認のみ完了しました。",
+		Processed:       len(classification.Results),
+		PendingApproval: pendingApproval,
 	}
-	if !hasGoogleToken || !hasClaudeKey {
-		result.Message = "Google トークンまたは Claude API キーが未設定のため、自動分類ジョブをスキップしました。"
+	if len(decisions) == 0 {
+		result.Message = fmt.Sprintf(
+			"新着 %d 件を分類しました。承認待ち %d 件のため safe-run 反映は実行しませんでした。",
+			len(classification.Results),
+			pendingApproval,
+		)
+		return result, nil
 	}
 
+	actionResult, err := a.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: decisions,
+		Metadata:  metadata,
+	})
+	if err != nil {
+		return result, maybeMarkSchedulerRetryable(
+			fmt.Errorf("定期 safe-run 反映に失敗しました: %w", err),
+		)
+	}
+
+	result.Success = actionResult.SuccessCount
+	result.Failed = actionResult.FailureCount
+	if actionResult.FailureCount > 0 {
+		result.Message = fmt.Sprintf(
+			"新着 %d 件を分類し safe-run を実行しましたが、%d 件失敗しました。",
+			len(classification.Results),
+			actionResult.FailureCount,
+		)
+		return result, fmt.Errorf("safe-run 反映に失敗が含まれます: %s", actionResult.Message)
+	}
+
+	result.Message = fmt.Sprintf(
+		"新着 %d 件を分類し、safe-run で %d 件を反映しました。承認待ち %d 件。",
+		len(classification.Results),
+		actionResult.SuccessCount,
+		pendingApproval,
+	)
 	return result, nil
 }
 
@@ -1432,7 +1532,94 @@ func (a *App) runScheduledKnownBlock(ctx context.Context) (scheduler.Result, err
 	}, nil
 }
 
-func (a *App) saveSchedulerLastRun(jobID string, runAt time.Time) error {
+func buildSchedulerClassificationQuery(lastRunAt time.Time) string {
+	normalized := lastRunAt.UTC()
+	if normalized.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf("after:%d", normalized.Unix())
+}
+
+func buildSchedulerSafeRunDecisions(
+	messages []types.EmailSummary,
+	results []types.ClassificationResult,
+) ([]types.GmailActionDecision, []types.GmailActionMetadata, int) {
+	messageByID := make(map[string]types.EmailSummary, len(messages))
+	for _, message := range messages {
+		messageByID[strings.TrimSpace(message.ID)] = message
+	}
+
+	decisions := make([]types.GmailActionDecision, 0, len(results))
+	metadata := make([]types.GmailActionMetadata, 0, len(results))
+	pendingApproval := 0
+
+	for _, result := range results {
+		messageID := strings.TrimSpace(result.MessageID)
+		if messageID == "" {
+			continue
+		}
+		if result.ReviewLevel != types.ClassificationReviewLevelAutoApply {
+			pendingApproval++
+			continue
+		}
+
+		safeCategory := schedulerSafeRunCategory(result.Category)
+		decisions = append(decisions, types.GmailActionDecision{
+			MessageID:   messageID,
+			Category:    safeCategory,
+			ReviewLevel: result.ReviewLevel,
+		})
+
+		source := result.Source
+		if !source.IsValid() {
+			source = types.ClassificationSourceClaude
+		}
+		message := messageByID[messageID]
+		metadata = append(metadata, types.GmailActionMetadata{
+			MessageID:   messageID,
+			ThreadID:    strings.TrimSpace(message.ThreadID),
+			From:        strings.TrimSpace(message.From),
+			Subject:     strings.TrimSpace(message.Subject),
+			Category:    safeCategory,
+			Confidence:  result.Confidence,
+			ReviewLevel: result.ReviewLevel,
+			Source:      source,
+		})
+	}
+
+	return decisions, metadata, pendingApproval
+}
+
+func schedulerSafeRunCategory(category types.ClassificationCategory) types.ClassificationCategory {
+	if category == types.ClassificationCategoryJunk {
+		return types.ClassificationCategoryArchive
+	}
+	return category
+}
+
+func maybeMarkSchedulerRetryable(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "timeout") ||
+		strings.Contains(text, "temporarily unavailable") ||
+		strings.Contains(text, "connection reset") ||
+		strings.Contains(text, "http 429") {
+		return scheduler.MarkRetryable(err)
+	}
+
+	for statusCode := 500; statusCode <= 599; statusCode++ {
+		if strings.Contains(text, fmt.Sprintf("http %d", statusCode)) {
+			return scheduler.MarkRetryable(err)
+		}
+	}
+
+	return err
+}
+
+func (a *App) saveSchedulerLastRun(jobID string, runAt time.Time, updateCommon bool) error {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
 		return errors.New("scheduler job ID が空です")
@@ -1451,12 +1638,15 @@ func (a *App) saveSchedulerLastRun(jobID string, runAt time.Time) error {
 	defer cancel()
 
 	lastRunAt := runAt.UTC().Format(time.RFC3339)
-	if err := store.SetSetting(ctx, schedulerSettingLastRunAt, lastRunAt); err != nil {
-		return fmt.Errorf("scheduler 最終実行時刻を保存できませんでした: %w", err)
-	}
 	jobKey := fmt.Sprintf(schedulerSettingLastRunTemplate, jobID)
 	if err := store.SetSetting(ctx, jobKey, lastRunAt); err != nil {
 		return fmt.Errorf("scheduler ジョブ実行時刻を保存できませんでした: %w", err)
+	}
+	if !updateCommon {
+		return nil
+	}
+	if err := store.SetSetting(ctx, schedulerSettingLastRunAt, lastRunAt); err != nil {
+		return fmt.Errorf("scheduler 最終実行時刻を保存できませんでした: %w", err)
 	}
 	return nil
 }
@@ -1475,11 +1665,37 @@ func (a *App) loadSchedulerLastRunAt() *time.Time {
 		return nil
 	}
 
-	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	return parseSchedulerRunAt(value)
+}
+
+func (a *App) loadSchedulerJobLastRunAt(jobID string) *time.Time {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil
+	}
+
+	store, err := a.requireDBStore()
 	if err != nil {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	jobKey := fmt.Sprintf(schedulerSettingLastRunTemplate, jobID)
+	value, ok, err := store.GetSetting(ctx, jobKey)
+	if err != nil || !ok {
+		return nil
+	}
+
+	return parseSchedulerRunAt(value)
+}
+
+func parseSchedulerRunAt(value string) *time.Time {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return nil
+	}
 	lastRunAt := parsed.UTC()
 	return &lastRunAt
 }
@@ -1487,9 +1703,6 @@ func (a *App) loadSchedulerLastRunAt() *time.Time {
 func (a *App) logSchedulerEvent(event scheduler.Event) {
 	switch event.Kind {
 	case scheduler.EventKindStarted:
-		if err := a.saveSchedulerLastRun(event.JobID, event.At); err != nil {
-			log.Printf("[scheduler] job=%s last_run 保存に失敗しました: %v", event.JobID, err)
-		}
 		log.Printf("[scheduler] job=%s attempt=%d started", event.JobID, event.Attempt)
 	case scheduler.EventKindRetryScheduled:
 		log.Printf(
@@ -1500,6 +1713,13 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 			event.Err,
 		)
 	case scheduler.EventKindSucceeded:
+		if err := a.saveSchedulerLastRun(
+			event.JobID,
+			event.At,
+			event.JobID == schedulerJobClassification,
+		); err != nil {
+			log.Printf("[scheduler] job=%s last_run 保存に失敗しました: %v", event.JobID, err)
+		}
 		log.Printf(
 			"[scheduler] job=%s succeeded processed=%d success=%d failed=%d pending=%d message=%s",
 			event.JobID,
@@ -1616,7 +1836,7 @@ func buildSchedulerNotification(event scheduler.Event) (types.SchedulerNotificat
 				detail = trimmedError
 			}
 		}
-		body := fmt.Sprintf("%s / %s", summary, detail)
+		body := fmt.Sprintf("%s / 停止理由: %s / %s", summary, schedulerStopReason(event), detail)
 		if schedulerNeedsSettingsGuidance(event.Result.Message, event.Err) {
 			body += " Settings 画面で Google 認証と Claude API キーを確認してください。"
 		}
@@ -1636,7 +1856,30 @@ func schedulerSkipNeedsNotification(event scheduler.Event) bool {
 	if event.Result.Failed > 0 || event.Result.PendingApproval > 0 {
 		return true
 	}
-	return schedulerNeedsSettingsGuidance(event.Result.Message, event.Err)
+	if schedulerNeedsSettingsGuidance(event.Result.Message, event.Err) {
+		return true
+	}
+	return schedulerNeedsManualRunGuidance(event.Result.Message)
+}
+
+func schedulerNeedsManualRunGuidance(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(text, "last_run_at") && strings.Contains(text, "手動実行")
+}
+
+func schedulerStopReason(event scheduler.Event) string {
+	switch {
+	case errors.Is(event.Err, context.DeadlineExceeded):
+		return "timeout (時間超過)"
+	case errors.Is(event.Err, context.Canceled):
+		return "canceled (キャンセル)"
+	case schedulerNeedsSettingsGuidance(event.Result.Message, event.Err):
+		return "auth_or_config_error (認証・設定エラー)"
+	case event.Attempt > event.MaxRetries:
+		return "retry_exhausted (再試行上限)"
+	default:
+		return "runtime_error (実行エラー)"
+	}
 }
 
 func schedulerNeedsSettingsGuidance(message string, runErr error) bool {
