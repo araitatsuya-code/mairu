@@ -1,16 +1,22 @@
 import './SettingsPage.css';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
     checkGmailConnection,
     clearClaudeAPIKey,
     cancelGoogleLogin,
+    defaultSchedulerSettings,
+    getNotificationPermissionStatus,
+    loadSchedulerSettings,
+    requestNotificationPermission,
     saveClaudeAPIKey,
     startGoogleLogin,
+    updateSchedulerSettings,
     type GmailConnectionResult,
     type GoogleLoginResult,
     type RuntimeStatus,
+    type SchedulerSettings,
 } from '../../lib/runtime';
 
 type SettingsPageProps = {
@@ -53,6 +59,19 @@ function formatLastRun(lastRunAt: string | null): string {
     }).format(parsed);
 }
 
+function formatNotificationPermission(permission: NotificationPermission | 'unsupported'): string {
+    switch (permission) {
+        case 'granted':
+            return '許可済み';
+        case 'denied':
+            return '拒否';
+        case 'default':
+            return '未確認';
+        default:
+            return '未対応環境';
+    }
+}
+
 export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageProps) {
     const [loginPending, setLoginPending] = useState(false);
     const [loginError, setLoginError] = useState<string | null>(null);
@@ -64,6 +83,14 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [claudeApiKey, setClaudeApiKey] = useState('');
     const [claudePending, setClaudePending] = useState(false);
     const [claudeError, setClaudeError] = useState<string | null>(null);
+    const [schedulerSettings, setSchedulerSettings] = useState<SchedulerSettings>(defaultSchedulerSettings);
+    const [schedulerPending, setSchedulerPending] = useState(false);
+    const [schedulerError, setSchedulerError] = useState<string | null>(null);
+    const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
+    const [schedulerLoaded, setSchedulerLoaded] = useState(false);
+    const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
+        getNotificationPermissionStatus(),
+    );
     const normalizedClaudeApiKey = claudeApiKey.trim();
     const claudeApiKeyBlank = normalizedClaudeApiKey === '';
     const googleStateLabel = status.authorized
@@ -76,6 +103,57 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         : status.authorized
           ? '確認待ち'
           : 'ログイン待ち';
+
+    useEffect(() => {
+        let cancelled = false;
+
+        async function loadSchedulerStatus() {
+            setSchedulerLoaded(false);
+
+            try {
+                const settings = await loadSchedulerSettings();
+                if (cancelled) {
+                    return;
+                }
+                setSchedulerSettings(settings);
+                setSchedulerLoaded(true);
+                setSchedulerError(null);
+            } catch (cause) {
+                if (cancelled) {
+                    return;
+                }
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '自動実行設定の読み込みに失敗しました。';
+                setSchedulerError(message);
+                setSchedulerLoaded(false);
+            }
+
+            try {
+                await onStatusRefresh();
+            } catch (cause) {
+                if (cancelled) {
+                    return;
+                }
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '状態の再取得に失敗しました。';
+                setSchedulerError((previous) => (previous ? `${previous} / ${message}` : message));
+            }
+
+            if (!cancelled) {
+                setNotificationPermission(getNotificationPermissionStatus());
+            }
+        }
+
+        void loadSchedulerStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     async function refreshStatusSafely(fallbackMessage: string): Promise<boolean> {
         try {
@@ -227,10 +305,73 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         }
     }
 
+    function updateSchedulerInterval(
+        key: 'classificationIntervalMinutes' | 'blocklistIntervalMinutes' | 'knownBlockIntervalMinutes',
+        value: string,
+    ) {
+        const parsed = Number.parseInt(value, 10);
+        const normalized = Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+        setSchedulerSettings((previous) => ({
+            ...previous,
+            [key]: normalized,
+        }));
+        setSchedulerMessage(null);
+    }
+
+    async function handleSaveSchedulerSettings() {
+        setSchedulerPending(true);
+        setSchedulerError(null);
+        setSchedulerMessage(null);
+
+        try {
+            const result = await updateSchedulerSettings(schedulerSettings);
+            if (!result.success) {
+                setSchedulerError(result.message);
+                return;
+            }
+
+            setSchedulerMessage(result.message);
+            await onStatusRefresh();
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : '自動実行設定の保存に失敗しました。';
+            setSchedulerError(message);
+        } finally {
+            setSchedulerPending(false);
+        }
+    }
+
+    async function handleRequestNotificationPermission() {
+        setSchedulerError(null);
+        setSchedulerMessage(null);
+
+        try {
+            const permission = await requestNotificationPermission();
+            setNotificationPermission(permission);
+            if (permission === 'granted') {
+                setSchedulerMessage('OS 通知を許可しました。');
+            } else if (permission === 'denied') {
+                setSchedulerError('通知権限が拒否されています。システム設定から有効化してください。');
+            } else if (permission === 'default') {
+                setSchedulerMessage('通知権限の確認は保留されました。');
+            } else {
+                setSchedulerError('この環境では通知 API が利用できません。');
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : '通知権限の確認に失敗しました。';
+            setSchedulerError(message);
+        }
+    }
+
     return (
         <div className="settings-page">
             <section className="settings-hero">
-                <p className="settings-eyebrow">MAIRU-006 / #6</p>
+                <p className="settings-eyebrow">MAIRU-014 / #14</p>
                 <h1>{appName} 設定ハブ</h1>
                 <p className="settings-lead">
                     起動直後に必要な初期状態をここで確認し、OAuth、Claude API キー、
@@ -476,11 +617,105 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                         <li className="settings-item">
                             <div className="settings-item-header">
                                 <h3 className="settings-item-title">通知と自動実行</h3>
-                                <span className="state-chip muted">後続 issue</span>
+                                <span className={`state-chip ${schedulerSettings.notificationsEnabled ? 'ready' : 'muted'}`}>
+                                    {schedulerSettings.notificationsEnabled ? '通知有効' : '通知停止'}
+                                </span>
                             </div>
                             <p className="settings-item-body">
-                                定期実行スケジュールや OS 通知の UI は、この領域に拡張します。
+                                定期実行間隔と OS 通知をまとめて管理します。保存すると即時にスケジューラーへ反映されます。
                             </p>
+                            <div className="settings-action-stack">
+                                <div className="settings-scheduler-grid">
+                                    <label className="settings-field" htmlFor="classification-interval-minutes">
+                                        <span className="settings-field-label">メール分類間隔（分）</span>
+                                        <input
+                                            id="classification-interval-minutes"
+                                            className="settings-input"
+                                            type="number"
+                                            min={1}
+                                            step={1}
+                                            value={schedulerSettings.classificationIntervalMinutes}
+                                            onChange={(event) => {
+                                                updateSchedulerInterval('classificationIntervalMinutes', event.target.value);
+                                            }}
+                                            disabled={schedulerPending || !schedulerLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="blocklist-interval-minutes">
+                                        <span className="settings-field-label">ブロック更新間隔（分）</span>
+                                        <input
+                                            id="blocklist-interval-minutes"
+                                            className="settings-input"
+                                            type="number"
+                                            min={1}
+                                            step={1}
+                                            value={schedulerSettings.blocklistIntervalMinutes}
+                                            onChange={(event) => {
+                                                updateSchedulerInterval('blocklistIntervalMinutes', event.target.value);
+                                            }}
+                                            disabled={schedulerPending || !schedulerLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="known-block-interval-minutes">
+                                        <span className="settings-field-label">既知ブロック処理間隔（分）</span>
+                                        <input
+                                            id="known-block-interval-minutes"
+                                            className="settings-input"
+                                            type="number"
+                                            min={1}
+                                            step={1}
+                                            value={schedulerSettings.knownBlockIntervalMinutes}
+                                            onChange={(event) => {
+                                                updateSchedulerInterval('knownBlockIntervalMinutes', event.target.value);
+                                            }}
+                                            disabled={schedulerPending || !schedulerLoaded}
+                                        />
+                                    </label>
+                                </div>
+                                <label className="settings-toggle" htmlFor="scheduler-notifications-enabled">
+                                    <input
+                                        id="scheduler-notifications-enabled"
+                                        type="checkbox"
+                                        checked={schedulerSettings.notificationsEnabled}
+                                        onChange={(event) => {
+                                            setSchedulerSettings((previous) => ({
+                                                ...previous,
+                                                notificationsEnabled: event.target.checked,
+                                            }));
+                                            setSchedulerMessage(null);
+                                        }}
+                                        disabled={schedulerPending || !schedulerLoaded}
+                                    />
+                                    <span>定期実行の結果を OS 通知する</span>
+                                </label>
+                                <p className="settings-inline-note">
+                                    通知権限: {formatNotificationPermission(notificationPermission)}
+                                </p>
+                                <div className="settings-action-row">
+                                    <button
+                                        className="settings-action-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleSaveSchedulerSettings();
+                                        }}
+                                        disabled={schedulerPending || !schedulerLoaded}
+                                    >
+                                        {schedulerPending ? '保存中...' : '自動実行設定を保存'}
+                                    </button>
+                                    <button
+                                        className="settings-cancel-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleRequestNotificationPermission();
+                                        }}
+                                        disabled={schedulerPending || notificationPermission === 'unsupported'}
+                                    >
+                                        通知権限を確認
+                                    </button>
+                                </div>
+                                {schedulerMessage ? <p className="settings-inline-note">{schedulerMessage}</p> : null}
+                                {schedulerError ? <p className="settings-error-note">{schedulerError}</p> : null}
+                            </div>
                         </li>
                     </ul>
                 </section>

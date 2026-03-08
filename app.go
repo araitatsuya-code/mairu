@@ -41,12 +41,15 @@ const (
 	schedulerSettingClassificationMinutes = "scheduler.classification.interval_minutes"
 	schedulerSettingBlocklistMinutes      = "scheduler.blocklist.interval_minutes"
 	schedulerSettingKnownBlockMinutes     = "scheduler.known_block.interval_minutes"
+	schedulerSettingNotificationsEnabled  = "scheduler.notifications.enabled"
 	schedulerSettingLastRunAt             = "scheduler.last_run_at"
 	schedulerSettingLastRunTemplate       = "scheduler.%s.last_run_at"
 
 	schedulerJobClassification = "classification_daily"
 	schedulerJobBlocklist      = "blocklist_daily"
 	schedulerJobKnownBlock     = "known_block_30m"
+
+	schedulerNotificationEventName = "scheduler:notification"
 )
 
 type App struct {
@@ -68,6 +71,7 @@ type App struct {
 	loginCancelSeq uint64
 	schedulerSvc   *scheduler.Service
 	schedulerStop  context.CancelFunc
+	eventsEmit     func(context.Context, string, ...interface{})
 
 	runScheduledClassificationJob func(context.Context) (scheduler.Result, error)
 	runScheduledBlocklistJob      func(context.Context) (scheduler.Result, error)
@@ -90,6 +94,7 @@ func NewApp() *App {
 		}),
 		gmailClient:   gmail.NewClient(gmail.Options{}),
 		secretManager: secretManager,
+		eventsEmit:    runtime.EventsEmit,
 	}
 	app.authStatus = app.initialAuthStatus()
 	app.gmailStatus = app.initialGmailStatus()
@@ -198,6 +203,117 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		ClaudeKeyPreview:   claudeKeyPreview,
 		DatabaseReady:      databaseReady,
 		LastRunAt:          lastRunAt,
+	}
+}
+
+// GetSchedulerSettings は定期実行と通知の設定を返す。
+func (a *App) GetSchedulerSettings() types.SchedulerSettings {
+	settings := defaultSchedulerSettings()
+
+	store, err := a.requireDBStore()
+	if err != nil {
+		return settings
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	settings.ClassificationIntervalMinutes = int(a.loadSchedulerIntervalMinutes(
+		ctx,
+		store,
+		schedulerSettingClassificationMinutes,
+		defaultClassificationIntervalMinutes,
+	) / time.Minute)
+	settings.BlocklistIntervalMinutes = int(a.loadSchedulerIntervalMinutes(
+		ctx,
+		store,
+		schedulerSettingBlocklistMinutes,
+		defaultBlocklistUpdateMinutes,
+	) / time.Minute)
+	settings.KnownBlockIntervalMinutes = int(a.loadSchedulerIntervalMinutes(
+		ctx,
+		store,
+		schedulerSettingKnownBlockMinutes,
+		defaultKnownBlockProcessMinutes,
+	) / time.Minute)
+	settings.NotificationsEnabled = a.loadSchedulerNotificationsEnabled(ctx, store)
+
+	return settings
+}
+
+// UpdateSchedulerSettings は定期実行と通知の設定を保存し、スケジューラーへ即時反映する。
+func (a *App) UpdateSchedulerSettings(request types.UpdateSchedulerSettingsRequest) types.OperationResult {
+	store, err := a.requireDBStore()
+	if err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: err.Error(),
+		}
+	}
+
+	previous := a.GetSchedulerSettings()
+	next := types.SchedulerSettings{
+		ClassificationIntervalMinutes: normalizeSchedulerIntervalMinutes(
+			request.ClassificationIntervalMinutes,
+			defaultClassificationIntervalMinutes,
+		),
+		BlocklistIntervalMinutes: normalizeSchedulerIntervalMinutes(
+			request.BlocklistIntervalMinutes,
+			defaultBlocklistUpdateMinutes,
+		),
+		KnownBlockIntervalMinutes: normalizeSchedulerIntervalMinutes(
+			request.KnownBlockIntervalMinutes,
+			defaultKnownBlockProcessMinutes,
+		),
+		NotificationsEnabled: request.NotificationsEnabled,
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if err := store.SetSettings(ctx, schedulerSettingsValueMap(next)); err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("自動実行設定を保存できませんでした: %v", err),
+		}
+	}
+
+	a.stopScheduler()
+	if err := a.startScheduler(); err != nil {
+		rollbackContext, rollbackCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+		defer rollbackCancel()
+
+		if rollbackErr := store.SetSettings(rollbackContext, schedulerSettingsValueMap(previous)); rollbackErr != nil {
+			return types.OperationResult{
+				Success: false,
+				Message: fmt.Sprintf(
+					"設定反映に失敗し、ロールバックにも失敗しました: apply=%v rollback=%v",
+					err,
+					rollbackErr,
+				),
+			}
+		}
+
+		if restartErr := a.startScheduler(); restartErr != nil {
+			return types.OperationResult{
+				Success: false,
+				Message: fmt.Sprintf(
+					"設定反映に失敗し旧設定へ戻しましたが、scheduler 再起動に失敗しました: apply=%v restart=%v",
+					err,
+					restartErr,
+				),
+			}
+		}
+
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("設定反映に失敗したため、旧設定へロールバックしました: %v", err),
+		}
+	}
+
+	return types.OperationResult{
+		Success: true,
+		Message: "自動実行設定を保存しました。",
 	}
 }
 
@@ -1155,11 +1271,59 @@ func (a *App) loadSchedulerIntervalMinutes(
 		log.Printf("scheduler 設定の形式が不正です key=%s value=%q", settingKey, value)
 		return time.Duration(defaultMinutes) * time.Minute
 	}
-	if minutes < minSchedulerIntervalMinutes {
-		minutes = minSchedulerIntervalMinutes
-	}
+	minutes = normalizeSchedulerIntervalMinutes(minutes, defaultMinutes)
 
 	return time.Duration(minutes) * time.Minute
+}
+
+func (a *App) loadSchedulerNotificationsEnabled(ctx context.Context, store *db.Store) bool {
+	value, ok, err := store.GetSetting(ctx, schedulerSettingNotificationsEnabled)
+	if err != nil {
+		log.Printf("scheduler 通知設定の読み出しに失敗しました: %v", err)
+		return true
+	}
+	if !ok {
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		log.Printf("scheduler 通知設定の形式が不正です value=%q", value)
+		return true
+	}
+}
+
+func defaultSchedulerSettings() types.SchedulerSettings {
+	return types.SchedulerSettings{
+		ClassificationIntervalMinutes: defaultClassificationIntervalMinutes,
+		BlocklistIntervalMinutes:      defaultBlocklistUpdateMinutes,
+		KnownBlockIntervalMinutes:     defaultKnownBlockProcessMinutes,
+		NotificationsEnabled:          true,
+	}
+}
+
+func normalizeSchedulerIntervalMinutes(value int, defaultValue int) int {
+	minutes := value
+	if minutes <= 0 {
+		minutes = defaultValue
+	}
+	if minutes < minSchedulerIntervalMinutes {
+		return minSchedulerIntervalMinutes
+	}
+	return minutes
+}
+
+func schedulerSettingsValueMap(settings types.SchedulerSettings) map[string]string {
+	return map[string]string{
+		schedulerSettingClassificationMinutes: strconv.Itoa(settings.ClassificationIntervalMinutes),
+		schedulerSettingBlocklistMinutes:      strconv.Itoa(settings.BlocklistIntervalMinutes),
+		schedulerSettingKnownBlockMinutes:     strconv.Itoa(settings.KnownBlockIntervalMinutes),
+		schedulerSettingNotificationsEnabled:  strconv.FormatBool(settings.NotificationsEnabled),
+	}
 }
 
 func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result, error) {
@@ -1337,15 +1501,18 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 		)
 	case scheduler.EventKindSucceeded:
 		log.Printf(
-			"[scheduler] job=%s succeeded processed=%d success=%d failed=%d message=%s",
+			"[scheduler] job=%s succeeded processed=%d success=%d failed=%d pending=%d message=%s",
 			event.JobID,
 			event.Result.Processed,
 			event.Result.Success,
 			event.Result.Failed,
+			event.Result.PendingApproval,
 			event.Result.Message,
 		)
+		a.emitSchedulerNotification(event)
 	case scheduler.EventKindSkipped:
 		log.Printf("[scheduler] job=%s skipped message=%s", event.JobID, event.Result.Message)
+		a.emitSchedulerNotification(event)
 	case scheduler.EventKindOverlapSkipped:
 		log.Printf("[scheduler] job=%s skipped because previous run is still active", event.JobID)
 	case scheduler.EventKindFailed:
@@ -1356,6 +1523,163 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 			event.MaxRetries+1,
 			event.Err,
 		)
+		a.emitSchedulerNotification(event)
+	}
+}
+
+func (a *App) emitSchedulerNotification(event scheduler.Event) {
+	if event.Kind != scheduler.EventKindSucceeded &&
+		event.Kind != scheduler.EventKindSkipped &&
+		event.Kind != scheduler.EventKindFailed {
+		return
+	}
+	if a.eventsEmit == nil || a.ctx == nil {
+		return
+	}
+
+	store, err := a.requireDBStore()
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+	defer cancel()
+
+	if !a.loadSchedulerNotificationsEnabled(ctx, store) {
+		return
+	}
+
+	notification, ok := buildSchedulerNotification(event)
+	if !ok {
+		return
+	}
+	a.eventsEmit(a.ctx, schedulerNotificationEventName, notification)
+}
+
+func buildSchedulerNotification(event scheduler.Event) (types.SchedulerNotification, bool) {
+	at := event.At.UTC()
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+
+	jobName := schedulerJobDisplayName(event.JobID)
+	summary := fmt.Sprintf(
+		"完了 %d件 / 失敗 %d件 / 承認待ち %d件",
+		event.Result.Success,
+		event.Result.Failed,
+		event.Result.PendingApproval,
+	)
+
+	switch event.Kind {
+	case scheduler.EventKindSucceeded:
+		level := "info"
+		if event.Result.Failed > 0 || event.Result.PendingApproval > 0 {
+			level = "warning"
+		}
+
+		body := summary
+		if message := strings.TrimSpace(event.Result.Message); message != "" {
+			body = fmt.Sprintf("%s / %s", summary, message)
+		}
+		return types.SchedulerNotification{
+			Title: fmt.Sprintf("%sが完了しました", jobName),
+			Body:  body,
+			Level: level,
+			JobID: event.JobID,
+			At:    at.Format(time.RFC3339),
+		}, true
+	case scheduler.EventKindSkipped:
+		if !schedulerSkipNeedsNotification(event) {
+			return types.SchedulerNotification{}, false
+		}
+
+		body := strings.TrimSpace(event.Result.Message)
+		if body == "" {
+			body = "実行条件を満たさないため、処理をスキップしました。"
+		}
+		if schedulerNeedsSettingsGuidance(event.Result.Message, event.Err) {
+			body += " Settings 画面で Google 認証と Claude API キーを確認してください。"
+		}
+
+		return types.SchedulerNotification{
+			Title: fmt.Sprintf("%sをスキップしました", jobName),
+			Body:  body,
+			Level: "warning",
+			JobID: event.JobID,
+			At:    at.Format(time.RFC3339),
+		}, true
+	case scheduler.EventKindFailed:
+		detail := "処理に失敗しました。"
+		if event.Err != nil {
+			trimmedError := strings.TrimSpace(event.Err.Error())
+			if trimmedError != "" {
+				detail = trimmedError
+			}
+		}
+		body := fmt.Sprintf("%s / %s", summary, detail)
+		if schedulerNeedsSettingsGuidance(event.Result.Message, event.Err) {
+			body += " Settings 画面で Google 認証と Claude API キーを確認してください。"
+		}
+		return types.SchedulerNotification{
+			Title: fmt.Sprintf("%sでエラーが発生しました", jobName),
+			Body:  body,
+			Level: "error",
+			JobID: event.JobID,
+			At:    at.Format(time.RFC3339),
+		}, true
+	default:
+		return types.SchedulerNotification{}, false
+	}
+}
+
+func schedulerSkipNeedsNotification(event scheduler.Event) bool {
+	if event.Result.Failed > 0 || event.Result.PendingApproval > 0 {
+		return true
+	}
+	return schedulerNeedsSettingsGuidance(event.Result.Message, event.Err)
+}
+
+func schedulerNeedsSettingsGuidance(message string, runErr error) bool {
+	parts := []string{strings.ToLower(strings.TrimSpace(message))}
+	if runErr != nil {
+		parts = append(parts, strings.ToLower(runErr.Error()))
+	}
+	text := strings.Join(parts, " ")
+
+	keywords := []string{
+		"google トークン",
+		"google token",
+		"access token",
+		"refresh token",
+		"refresh_token",
+		"token expired",
+		"token has expired",
+		"claude api キー",
+		"claude api key",
+		"認証",
+		"unauthorized",
+		"forbidden",
+		"invalid_grant",
+		"invalid api key",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func schedulerJobDisplayName(jobID string) string {
+	switch strings.TrimSpace(jobID) {
+	case schedulerJobClassification:
+		return "メール分類ジョブ"
+	case schedulerJobBlocklist:
+		return "ブロックリスト更新ジョブ"
+	case schedulerJobKnownBlock:
+		return "既知ブロック処理ジョブ"
+	default:
+		return "定期実行ジョブ"
 	}
 }
 

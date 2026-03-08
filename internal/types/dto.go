@@ -348,6 +348,31 @@ type RuntimeStatus struct {
 	LastRunAt          *time.Time
 }
 
+// SchedulerSettings は定期実行と通知の設定を表す。
+type SchedulerSettings struct {
+	ClassificationIntervalMinutes int
+	BlocklistIntervalMinutes      int
+	KnownBlockIntervalMinutes     int
+	NotificationsEnabled          bool
+}
+
+// UpdateSchedulerSettingsRequest は定期実行設定の更新入力を表す。
+type UpdateSchedulerSettingsRequest struct {
+	ClassificationIntervalMinutes int
+	BlocklistIntervalMinutes      int
+	KnownBlockIntervalMinutes     int
+	NotificationsEnabled          bool
+}
+
+// SchedulerNotification はスケジューラー実行結果の通知ペイロードを表す。
+type SchedulerNotification struct {
+	Title string
+	Body  string
+	Level string
+	JobID string
+	At    string
+}
+
 // GoogleLoginResult は Google OAuth ログイン実行結果を表す。
 type GoogleLoginResult struct {
 	Success            bool

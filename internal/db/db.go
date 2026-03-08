@@ -239,6 +239,54 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// SetSettings は複数の設定値を 1 トランザクションで保存する。
+func (s *Store) SetSettings(ctx context.Context, settings map[string]string) error {
+	if err := s.ensureReady(); err != nil {
+		return err
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("settings 保存トランザクションを開始できませんでした: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(
+		ctx,
+		`INSERT INTO settings (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP`,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("settings 保存クエリを準備できませんでした: %w", err)
+	}
+	defer stmt.Close()
+
+	for key, value := range settings {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey == "" {
+			_ = tx.Rollback()
+			return errors.New("settings のキーは必須です")
+		}
+
+		if _, err := stmt.ExecContext(ctx, normalizedKey, value); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("settings を保存できませんでした: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("settings 保存トランザクションのコミットに失敗しました: %w", err)
+	}
+
+	return nil
+}
+
 // GetSetting は設定値をキー単位で読み出す。
 func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
 	if err := s.ensureReady(); err != nil {
