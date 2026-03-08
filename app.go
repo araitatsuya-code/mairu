@@ -251,6 +251,7 @@ func (a *App) UpdateSchedulerSettings(request types.UpdateSchedulerSettingsReque
 		}
 	}
 
+	previous := a.GetSchedulerSettings()
 	next := types.SchedulerSettings{
 		ClassificationIntervalMinutes: normalizeSchedulerIntervalMinutes(
 			request.ClassificationIntervalMinutes,
@@ -270,12 +271,7 @@ func (a *App) UpdateSchedulerSettings(request types.UpdateSchedulerSettingsReque
 	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
 	defer cancel()
 
-	if err := store.SetSettings(ctx, map[string]string{
-		schedulerSettingClassificationMinutes: strconv.Itoa(next.ClassificationIntervalMinutes),
-		schedulerSettingBlocklistMinutes:      strconv.Itoa(next.BlocklistIntervalMinutes),
-		schedulerSettingKnownBlockMinutes:     strconv.Itoa(next.KnownBlockIntervalMinutes),
-		schedulerSettingNotificationsEnabled:  strconv.FormatBool(next.NotificationsEnabled),
-	}); err != nil {
+	if err := store.SetSettings(ctx, schedulerSettingsValueMap(next)); err != nil {
 		return types.OperationResult{
 			Success: false,
 			Message: fmt.Sprintf("自動実行設定を保存できませんでした: %v", err),
@@ -284,9 +280,34 @@ func (a *App) UpdateSchedulerSettings(request types.UpdateSchedulerSettingsReque
 
 	a.stopScheduler()
 	if err := a.startScheduler(); err != nil {
+		rollbackContext, rollbackCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+		defer rollbackCancel()
+
+		if rollbackErr := store.SetSettings(rollbackContext, schedulerSettingsValueMap(previous)); rollbackErr != nil {
+			return types.OperationResult{
+				Success: false,
+				Message: fmt.Sprintf(
+					"設定反映に失敗し、ロールバックにも失敗しました: apply=%v rollback=%v",
+					err,
+					rollbackErr,
+				),
+			}
+		}
+
+		if restartErr := a.startScheduler(); restartErr != nil {
+			return types.OperationResult{
+				Success: false,
+				Message: fmt.Sprintf(
+					"設定反映に失敗し旧設定へ戻しましたが、scheduler 再起動に失敗しました: apply=%v restart=%v",
+					err,
+					restartErr,
+				),
+			}
+		}
+
 		return types.OperationResult{
 			Success: false,
-			Message: fmt.Sprintf("設定を保存しましたが、スケジューラー再起動に失敗しました: %v", err),
+			Message: fmt.Sprintf("設定反映に失敗したため、旧設定へロールバックしました: %v", err),
 		}
 	}
 
@@ -1296,6 +1317,15 @@ func normalizeSchedulerIntervalMinutes(value int, defaultValue int) int {
 	return minutes
 }
 
+func schedulerSettingsValueMap(settings types.SchedulerSettings) map[string]string {
+	return map[string]string{
+		schedulerSettingClassificationMinutes: strconv.Itoa(settings.ClassificationIntervalMinutes),
+		schedulerSettingBlocklistMinutes:      strconv.Itoa(settings.BlocklistIntervalMinutes),
+		schedulerSettingKnownBlockMinutes:     strconv.Itoa(settings.KnownBlockIntervalMinutes),
+		schedulerSettingNotificationsEnabled:  strconv.FormatBool(settings.NotificationsEnabled),
+	}
+}
+
 func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result, error) {
 	if a.runScheduledClassificationJob != nil {
 		return a.runScheduledClassificationJob(ctx)
@@ -1579,10 +1609,14 @@ func buildSchedulerNotification(event scheduler.Event) (types.SchedulerNotificat
 			At:    at.Format(time.RFC3339),
 		}, true
 	case scheduler.EventKindFailed:
-		body := "処理に失敗しました。"
+		detail := "処理に失敗しました。"
 		if event.Err != nil {
-			body = strings.TrimSpace(event.Err.Error())
+			trimmedError := strings.TrimSpace(event.Err.Error())
+			if trimmedError != "" {
+				detail = trimmedError
+			}
 		}
+		body := fmt.Sprintf("%s / %s", summary, detail)
 		if schedulerNeedsSettingsGuidance(event.Result.Message, event.Err) {
 			body += " Settings 画面で Google 認証と Claude API キーを確認してください。"
 		}

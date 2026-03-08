@@ -108,15 +108,15 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         let cancelled = false;
 
         async function loadSchedulerStatus() {
+            setSchedulerLoaded(false);
+
             try {
-                const [settings] = await Promise.all([
-                    loadSchedulerSettings(),
-                    onStatusRefresh(),
-                ]);
+                const settings = await loadSchedulerSettings();
                 if (cancelled) {
                     return;
                 }
                 setSchedulerSettings(settings);
+                setSchedulerLoaded(true);
                 setSchedulerError(null);
             } catch (cause) {
                 if (cancelled) {
@@ -127,11 +127,24 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                         ? cause.message
                         : '自動実行設定の読み込みに失敗しました。';
                 setSchedulerError(message);
-            } finally {
-                if (!cancelled) {
-                    setSchedulerLoaded(true);
-                    setNotificationPermission(getNotificationPermissionStatus());
+                setSchedulerLoaded(false);
+            }
+
+            try {
+                await onStatusRefresh();
+            } catch (cause) {
+                if (cancelled) {
+                    return;
                 }
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '状態の再取得に失敗しました。';
+                setSchedulerError((previous) => (previous ? `${previous} / ${message}` : message));
+            }
+
+            if (!cancelled) {
+                setNotificationPermission(getNotificationPermissionStatus());
             }
         }
 
