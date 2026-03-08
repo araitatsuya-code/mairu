@@ -553,6 +553,8 @@ export const defaultSchedulerSettings: SchedulerSettings = {
 };
 
 const schedulerNotificationEventName = 'scheduler:notification';
+const schedulerNotificationListeners = new Set<(notification: SchedulerNotification) => void>();
+let schedulerNotificationSubscribed = false;
 
 export async function loadAppName(): Promise<string> {
     const appApi = window.go?.main?.App;
@@ -965,22 +967,32 @@ export function subscribeSchedulerNotifications(
 ): () => void {
     const runtimeApi = window.runtime;
     const eventsOn = runtimeApi?.EventsOn;
-    const eventsOff = runtimeApi?.EventsOff;
 
-    if (!eventsOn || !eventsOff) {
+    if (!eventsOn) {
         return () => {};
     }
 
-    const handler = (...payload: unknown[]) => {
-        const parsed = parseSchedulerNotificationPayload(payload);
-        if (parsed) {
-            listener(parsed);
-        }
-    };
-    eventsOn(schedulerNotificationEventName, handler);
+    schedulerNotificationListeners.add(listener);
+    if (!schedulerNotificationSubscribed) {
+        eventsOn(schedulerNotificationEventName, (...payload: unknown[]) => {
+            const parsed = parseSchedulerNotificationPayload(payload);
+            if (!parsed) {
+                return;
+            }
+            schedulerNotificationListeners.forEach((currentListener) => {
+                currentListener(parsed);
+            });
+        });
+        schedulerNotificationSubscribed = true;
+    }
 
+    let disposed = false;
     return () => {
-        eventsOff(schedulerNotificationEventName);
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        schedulerNotificationListeners.delete(listener);
     };
 }
 

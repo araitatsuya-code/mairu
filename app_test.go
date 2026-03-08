@@ -769,6 +769,109 @@ func TestBuildSchedulerNotificationAddsSettingsGuidanceOnCredentialError(t *test
 	}
 }
 
+func TestEmitSchedulerNotificationSkipsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if err := store.SetSetting(ctx, schedulerSettingNotificationsEnabled, "false"); err != nil {
+		t.Fatalf("SetSetting returned error: %v", err)
+	}
+
+	called := 0
+	app := &App{
+		ctx:           ctx,
+		dbStore:       store,
+		databaseReady: true,
+		eventsEmit: func(context.Context, string, ...interface{}) {
+			called++
+		},
+	}
+
+	app.emitSchedulerNotification(scheduler.Event{
+		JobID: schedulerJobBlocklist,
+		Kind:  scheduler.EventKindSucceeded,
+		Result: scheduler.Result{
+			Success: 1,
+			Message: "ok",
+		},
+	})
+
+	if called != 0 {
+		t.Fatalf("eventsEmit called = %d, want 0", called)
+	}
+}
+
+func TestEmitSchedulerNotificationEmitsWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	called := 0
+	gotEventName := ""
+	var gotNotification types.SchedulerNotification
+
+	app := &App{
+		ctx:           ctx,
+		dbStore:       store,
+		databaseReady: true,
+		eventsEmit: func(_ context.Context, eventName string, payload ...interface{}) {
+			called++
+			gotEventName = eventName
+			if len(payload) == 1 {
+				if notification, ok := payload[0].(types.SchedulerNotification); ok {
+					gotNotification = notification
+				}
+			}
+		},
+	}
+
+	app.emitSchedulerNotification(scheduler.Event{
+		JobID: schedulerJobBlocklist,
+		Kind:  scheduler.EventKindSucceeded,
+		At:    time.Date(2026, time.March, 8, 15, 0, 0, 0, time.UTC),
+		Result: scheduler.Result{
+			Success: 3,
+			Message: "ブロックリストを更新しました。",
+		},
+	})
+
+	if called != 1 {
+		t.Fatalf("eventsEmit called = %d, want 1", called)
+	}
+	if gotEventName != schedulerNotificationEventName {
+		t.Fatalf("eventName = %q, want %q", gotEventName, schedulerNotificationEventName)
+	}
+	if gotNotification.Title == "" {
+		t.Fatalf("notification.Title is empty")
+	}
+	if !strings.Contains(gotNotification.Body, "完了 3件") {
+		t.Fatalf("notification.Body = %q, want contains summary", gotNotification.Body)
+	}
+}
+
 func TestRunScheduledBlocklistRegistersSuggestions(t *testing.T) {
 	t.Parallel()
 

@@ -117,6 +117,46 @@ func TestStorePersistsSettingsAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestSetSettingsRollsBackOnError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mairu.db")
+
+	store, err := Open(ctx, OpenOptions{Path: path})
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	if err := store.SetSetting(ctx, "scheduler.enabled", "true"); err != nil {
+		t.Fatalf("SetSetting returned error: %v", err)
+	}
+
+	err = store.SetSettings(ctx, map[string]string{
+		"scheduler.enabled": "false",
+		"   ":               "invalid",
+	})
+	if err == nil {
+		t.Fatalf("SetSettings error = nil, want non-nil")
+	}
+
+	got, ok, err := store.GetSetting(ctx, "scheduler.enabled")
+	if err != nil {
+		t.Fatalf("GetSetting returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetSetting ok = false, want true")
+	}
+	if got != "true" {
+		t.Fatalf("GetSetting = %q, want %q", got, "true")
+	}
+}
+
 func TestBlocklistCRUD(t *testing.T) {
 	t.Parallel()
 

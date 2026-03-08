@@ -270,44 +270,15 @@ func (a *App) UpdateSchedulerSettings(request types.UpdateSchedulerSettingsReque
 	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
 	defer cancel()
 
-	if err := store.SetSetting(
-		ctx,
-		schedulerSettingClassificationMinutes,
-		strconv.Itoa(next.ClassificationIntervalMinutes),
-	); err != nil {
+	if err := store.SetSettings(ctx, map[string]string{
+		schedulerSettingClassificationMinutes: strconv.Itoa(next.ClassificationIntervalMinutes),
+		schedulerSettingBlocklistMinutes:      strconv.Itoa(next.BlocklistIntervalMinutes),
+		schedulerSettingKnownBlockMinutes:     strconv.Itoa(next.KnownBlockIntervalMinutes),
+		schedulerSettingNotificationsEnabled:  strconv.FormatBool(next.NotificationsEnabled),
+	}); err != nil {
 		return types.OperationResult{
 			Success: false,
-			Message: fmt.Sprintf("分類ジョブの間隔を保存できませんでした: %v", err),
-		}
-	}
-	if err := store.SetSetting(
-		ctx,
-		schedulerSettingBlocklistMinutes,
-		strconv.Itoa(next.BlocklistIntervalMinutes),
-	); err != nil {
-		return types.OperationResult{
-			Success: false,
-			Message: fmt.Sprintf("ブロックリスト更新間隔を保存できませんでした: %v", err),
-		}
-	}
-	if err := store.SetSetting(
-		ctx,
-		schedulerSettingKnownBlockMinutes,
-		strconv.Itoa(next.KnownBlockIntervalMinutes),
-	); err != nil {
-		return types.OperationResult{
-			Success: false,
-			Message: fmt.Sprintf("既知ブロック処理間隔を保存できませんでした: %v", err),
-		}
-	}
-	if err := store.SetSetting(
-		ctx,
-		schedulerSettingNotificationsEnabled,
-		strconv.FormatBool(next.NotificationsEnabled),
-	); err != nil {
-		return types.OperationResult{
-			Success: false,
-			Message: fmt.Sprintf("通知設定を保存できませんでした: %v", err),
+			Message: fmt.Sprintf("自動実行設定を保存できませんでした: %v", err),
 		}
 	}
 
@@ -1644,6 +1615,11 @@ func schedulerNeedsSettingsGuidance(message string, runErr error) bool {
 	keywords := []string{
 		"google トークン",
 		"google token",
+		"access token",
+		"refresh token",
+		"refresh_token",
+		"token expired",
+		"token has expired",
 		"claude api キー",
 		"claude api key",
 		"認証",
@@ -1651,7 +1627,6 @@ func schedulerNeedsSettingsGuidance(message string, runErr error) bool {
 		"forbidden",
 		"invalid_grant",
 		"invalid api key",
-		"token",
 	}
 	for _, keyword := range keywords {
 		if strings.Contains(text, keyword) {
