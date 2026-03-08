@@ -161,6 +161,27 @@
     gap: 12px;
 }
 
+.settings-scheduler-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    width: fit-content;
+    color: #dbeafe;
+    font-size: 0.92rem;
+}
+
+.settings-toggle input {
+    width: 18px;
+    height: 18px;
+    accent-color: #38bdf8;
+}
+
 .settings-action-button {
     width: fit-content;
     padding: 11px 16px;
@@ -357,6 +378,10 @@
 @media (max-width: 900px) {
     .settings-status-grid,
     .settings-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-scheduler-grid {
         grid-template-columns: 1fr;
     }
 }

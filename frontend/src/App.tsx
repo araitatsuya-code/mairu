@@ -5,6 +5,8 @@ import {
     defaultRuntimeStatus,
     loadAppName,
     loadRuntimeStatus,
+    showSchedulerNotification,
+    subscribeSchedulerNotifications,
     type RuntimeStatus,
 } from './lib/runtime';
 import { BlocklistPage } from './pages/Blocklist/BlocklistPage';
@@ -61,6 +63,16 @@ function App() {
 
         return () => {
             cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        const unsubscribe = subscribeSchedulerNotifications((notification) => {
+            showSchedulerNotification(notification);
+        });
+
+        return () => {
+            unsubscribe();
         };
     }, []);
 

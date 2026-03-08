@@ -159,6 +159,23 @@ export type OperationResult = {
     message: string;
 };
 
+export type SchedulerSettings = {
+    classificationIntervalMinutes: number;
+    blocklistIntervalMinutes: number;
+    knownBlockIntervalMinutes: number;
+    notificationsEnabled: boolean;
+};
+
+export type UpdateSchedulerSettingsRequest = SchedulerSettings;
+
+export type SchedulerNotification = {
+    title: string;
+    body: string;
+    level: 'info' | 'warning' | 'error';
+    jobID: string;
+    at: string;
+};
+
 export type ClassificationCorrection = {
     messageID: string;
     sender: string;
@@ -201,6 +218,33 @@ type WailsAppApi = {
               ClaudeKeyPreview?: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
+          };
+    GetSchedulerSettings?: () =>
+        | Promise<{
+              ClassificationIntervalMinutes?: number;
+              BlocklistIntervalMinutes?: number;
+              KnownBlockIntervalMinutes?: number;
+              NotificationsEnabled?: boolean;
+          }>
+        | {
+              ClassificationIntervalMinutes?: number;
+              BlocklistIntervalMinutes?: number;
+              KnownBlockIntervalMinutes?: number;
+              NotificationsEnabled?: boolean;
+          };
+    UpdateSchedulerSettings?: (request: {
+        ClassificationIntervalMinutes: number;
+        BlocklistIntervalMinutes: number;
+        KnownBlockIntervalMinutes: number;
+        NotificationsEnabled: boolean;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
           };
     StartGoogleLogin?: () =>
         | Promise<{
@@ -479,6 +523,10 @@ declare global {
                 App?: WailsAppApi;
             };
         };
+        runtime?: {
+            EventsOn?: (eventName: string, callback: (...payload: unknown[]) => void) => void;
+            EventsOff?: (eventName: string) => void;
+        };
     }
 }
 
@@ -496,6 +544,15 @@ export const defaultRuntimeStatus: RuntimeStatus = {
     databaseReady: false,
     lastRunAt: null,
 };
+
+export const defaultSchedulerSettings: SchedulerSettings = {
+    classificationIntervalMinutes: 24 * 60,
+    blocklistIntervalMinutes: 24 * 60,
+    knownBlockIntervalMinutes: 30,
+    notificationsEnabled: true,
+};
+
+const schedulerNotificationEventName = 'scheduler:notification';
 
 export async function loadAppName(): Promise<string> {
     const appApi = window.go?.main?.App;
@@ -531,6 +588,48 @@ export async function loadRuntimeStatus(): Promise<RuntimeStatus> {
         claudeKeyPreview: raw.ClaudeKeyPreview ?? '',
         databaseReady: raw.DatabaseReady,
         lastRunAt: raw.LastRunAt ?? null,
+    };
+}
+
+export async function loadSchedulerSettings(): Promise<SchedulerSettings> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.GetSchedulerSettings?.();
+    const raw = result ? await result : null;
+
+    if (!raw) {
+        return defaultSchedulerSettings;
+    }
+
+    return {
+        classificationIntervalMinutes:
+            raw.ClassificationIntervalMinutes ?? defaultSchedulerSettings.classificationIntervalMinutes,
+        blocklistIntervalMinutes:
+            raw.BlocklistIntervalMinutes ?? defaultSchedulerSettings.blocklistIntervalMinutes,
+        knownBlockIntervalMinutes:
+            raw.KnownBlockIntervalMinutes ?? defaultSchedulerSettings.knownBlockIntervalMinutes,
+        notificationsEnabled: raw.NotificationsEnabled ?? defaultSchedulerSettings.notificationsEnabled,
+    };
+}
+
+export async function updateSchedulerSettings(
+    request: UpdateSchedulerSettingsRequest,
+): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.UpdateSchedulerSettings?.({
+        ClassificationIntervalMinutes: request.classificationIntervalMinutes,
+        BlocklistIntervalMinutes: request.blocklistIntervalMinutes,
+        KnownBlockIntervalMinutes: request.knownBlockIntervalMinutes,
+        NotificationsEnabled: request.notificationsEnabled,
+    });
+
+    if (!result) {
+        throw new Error('自動実行設定更新 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
     };
 }
 
@@ -827,6 +926,95 @@ export async function recordClassificationRun(
         success: raw.Success,
         message: raw.Message,
     };
+}
+
+function parseSchedulerNotificationPayload(payload: unknown): SchedulerNotification | null {
+    const value =
+        Array.isArray(payload) && payload.length === 1
+            ? payload[0]
+            : payload;
+
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const item = value as Partial<{
+        Title: string;
+        Body: string;
+        Level: string;
+        JobID: string;
+        At: string;
+    }>;
+
+    const level =
+        item.Level === 'warning' || item.Level === 'error'
+            ? item.Level
+            : 'info';
+
+    return {
+        title: item.Title ?? 'Mairu 自動実行',
+        body: item.Body ?? '',
+        level,
+        jobID: item.JobID ?? '',
+        at: item.At ?? new Date().toISOString(),
+    };
+}
+
+export function subscribeSchedulerNotifications(
+    listener: (notification: SchedulerNotification) => void,
+): () => void {
+    const runtimeApi = window.runtime;
+    const eventsOn = runtimeApi?.EventsOn;
+    const eventsOff = runtimeApi?.EventsOff;
+
+    if (!eventsOn || !eventsOff) {
+        return () => {};
+    }
+
+    const handler = (...payload: unknown[]) => {
+        const parsed = parseSchedulerNotificationPayload(payload);
+        if (parsed) {
+            listener(parsed);
+        }
+    };
+    eventsOn(schedulerNotificationEventName, handler);
+
+    return () => {
+        eventsOff(schedulerNotificationEventName);
+    };
+}
+
+export function getNotificationPermissionStatus(): NotificationPermission | 'unsupported' {
+    if (typeof Notification === 'undefined') {
+        return 'unsupported';
+    }
+    return Notification.permission;
+}
+
+export async function requestNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+    if (typeof Notification === 'undefined') {
+        return 'unsupported';
+    }
+    return Notification.requestPermission();
+}
+
+export function showSchedulerNotification(notification: SchedulerNotification): boolean {
+    if (typeof Notification === 'undefined') {
+        return false;
+    }
+    if (Notification.permission !== 'granted') {
+        return false;
+    }
+
+    try {
+        new Notification(notification.title, {
+            body: notification.body,
+            tag: `mairu-${notification.jobID}-${notification.level}`,
+        });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 async function runExportOperation(
