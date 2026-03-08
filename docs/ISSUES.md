@@ -36,8 +36,8 @@
 | MAIRU-011 | #11 | done | Phase 3 | ブロックリスト管理と AI スキップ処理 | MAIRU-009, MAIRU-010 |
 | MAIRU-012 | #12 | done | Phase 3 | エクスポート機能と mbox 調査 | MAIRU-010, MAIRU-011 |
 | MAIRU-013 | #13 | done | Phase 4 | 定期実行スケジューラーと再試行制御 | MAIRU-009, MAIRU-010, MAIRU-011 |
-| MAIRU-014 | #14 | in progress | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
-| MAIRU-015 | #35 | backlog | Phase 5 | 移行アシスタント | MAIRU-012 |
+| MAIRU-014 | #14 | done | Phase 4 | OS 通知と自動実行設定 UI | MAIRU-003, MAIRU-013 |
+| MAIRU-015 | #35 | ready | Phase 5 | 移行アシスタント | MAIRU-012 |
 | MAIRU-016 | #36 | backlog | Phase 6 | GitHub Actions リリース自動化 | MAIRU-001 |
 | MAIRU-017 | #37 | backlog | v2+ | AI アシスタント機能 | MAIRU-014 |
 
@@ -226,7 +226,7 @@
   - 二重実行や無限リトライが起きない
 
 ### MAIRU-014: OS 通知と自動実行設定 UI
-- 状態: `in progress`
+- 状態: `done`
 - フェーズ: Phase 4
 - 依存: `MAIRU-003`, `MAIRU-013`
 - 目的: 自動実行結果をユーザーに伝え、スケジュールを設定できるようにする。
@@ -240,7 +240,7 @@
   - ユーザーが設定画面から自動実行条件を変更できる
 
 ### MAIRU-015: 移行アシスタント
-- 状態: `backlog`
+- 状態: `ready`
 - フェーズ: Phase 5
 - GitHub: `#35`
 - 依存: `MAIRU-012`
