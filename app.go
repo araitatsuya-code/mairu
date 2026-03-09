@@ -1397,6 +1397,9 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	)
 	if !hasCheckpoint {
 		checkpoint = newClassificationCheckpoint(*lastRunAt, fetchQuery, labelIDs)
+		if err := a.saveClassificationCheckpoint(checkpoint); err != nil {
+			return scheduler.Result{}, fmt.Errorf("分類 checkpoint の初期化に失敗しました: %w", err)
+		}
 	}
 	initialCompletedBatches := checkpoint.CompletedBatches
 	pageToken := ""
@@ -1471,6 +1474,9 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	}
 
 	if currentProcessedCount == 0 && aggregated.Processed == 0 {
+		if err := a.clearClassificationCheckpoint(); err != nil {
+			log.Printf("分類 checkpoint のクリアに失敗しました: %v", err)
+		}
 		return scheduler.Result{
 			Skipped: true,
 			Message: fmt.Sprintf(
