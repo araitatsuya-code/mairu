@@ -65,7 +65,6 @@ type classificationCheckpoint struct {
 	LastRunAt        string   `json:"last_run_at"`
 	Query            string   `json:"query"`
 	LabelIDs         []string `json:"label_ids"`
-	BatchSize        int      `json:"batch_size"`
 	CompletedBatches int      `json:"completed_batches"`
 	Processed        int      `json:"processed"`
 	Success          int      `json:"success"`
@@ -1401,8 +1400,8 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 	}
 	initialCompletedBatches := checkpoint.CompletedBatches
 	pageToken := ""
-	pageCount := 0
-	fetchedCount := 0
+	processedPageCount := 0
+	currentProcessedCount := 0
 	aggregated := scheduler.Result{
 		Processed:       checkpoint.Processed,
 		Success:         checkpoint.Success,
@@ -1424,9 +1423,7 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 			)
 		}
 
-		pageCount++
 		messages := fetched.Messages
-		fetchedCount += len(messages)
 		if completedBatches > 0 {
 			completedBatches--
 			nextPageToken := strings.TrimSpace(fetched.NextPageToken)
@@ -1436,6 +1433,7 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 			pageToken = nextPageToken
 			continue
 		}
+		processedPageCount++
 
 		pageResult, err := a.runScheduledClassificationPage(messages)
 		if err != nil {
@@ -1451,6 +1449,7 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		aggregated.Success += pageResult.Success
 		aggregated.Failed += pageResult.Failed
 		aggregated.PendingApproval += pageResult.PendingApproval
+		currentProcessedCount += pageResult.Processed
 		checkpoint.CompletedBatches++
 		checkpoint.Processed = aggregated.Processed
 		checkpoint.Success = aggregated.Success
@@ -1471,7 +1470,7 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		pageToken = nextPageToken
 	}
 
-	if fetchedCount == 0 && aggregated.Processed == 0 {
+	if currentProcessedCount == 0 && aggregated.Processed == 0 {
 		return scheduler.Result{
 			Skipped: true,
 			Message: fmt.Sprintf(
@@ -1481,14 +1480,11 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 		}, nil
 	}
 
-	aggregated.Message = fmt.Sprintf(
-		"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。%s",
-		fetchedCount,
-		pageCount,
-		aggregated.Success,
-		aggregated.Failed,
-		aggregated.PendingApproval,
-		strings.TrimSpace(buildCheckpointResumeMessage(initialCompletedBatches)),
+	aggregated.Message = buildScheduledClassificationSummary(
+		aggregated,
+		currentProcessedCount,
+		processedPageCount,
+		initialCompletedBatches,
 	)
 	return aggregated, nil
 }
@@ -1501,11 +1497,40 @@ func schedulerResultSkippedCount(result scheduler.Result) int {
 	return skipped
 }
 
-func buildCheckpointResumeMessage(completedBatches int) string {
-	if completedBatches <= 0 {
-		return ""
+func buildScheduledClassificationSummary(
+	aggregated scheduler.Result,
+	currentProcessedCount int,
+	processedPageCount int,
+	initialCompletedBatches int,
+) string {
+	if initialCompletedBatches <= 0 {
+		return fmt.Sprintf(
+			"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+			currentProcessedCount,
+			processedPageCount,
+			aggregated.Success,
+			aggregated.Failed,
+			aggregated.PendingApproval,
+		)
 	}
-	return fmt.Sprintf("checkpoint から %d バッチ再開しました。", completedBatches)
+	if currentProcessedCount == 0 {
+		return fmt.Sprintf(
+			"checkpoint から再開しましたが、追加処理対象はありませんでした（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+			initialCompletedBatches,
+			aggregated.Success,
+			aggregated.Failed,
+			aggregated.PendingApproval,
+		)
+	}
+	return fmt.Sprintf(
+		"checkpoint から再開し、今回 %d 件を %d ページで追加処理しました（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+		currentProcessedCount,
+		processedPageCount,
+		initialCompletedBatches,
+		aggregated.Success,
+		aggregated.Failed,
+		aggregated.PendingApproval,
+	)
 }
 
 func (a *App) runScheduledBlocklist(ctx context.Context) (scheduler.Result, error) {
@@ -1844,7 +1869,6 @@ func newClassificationCheckpoint(
 		LastRunAt: lastRunAt.UTC().Format(time.RFC3339),
 		Query:     strings.TrimSpace(fetchQuery),
 		LabelIDs:  normalizedLabels,
-		BatchSize: types.ClassificationMaxBatchSize,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }
@@ -1892,10 +1916,6 @@ func (a *App) loadClassificationCheckpoint(
 		checkpoint.Skipped < 0 {
 		return classificationCheckpoint{}, false
 	}
-	if checkpoint.BatchSize <= 0 {
-		checkpoint.BatchSize = types.ClassificationMaxBatchSize
-	}
-
 	return checkpoint, true
 }
 
