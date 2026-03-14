@@ -522,8 +522,8 @@ func TestExecuteGmailActionsRequiresConfirmation(t *testing.T) {
 func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 	t.Parallel()
 
-	store := auth.NewMemorySecretStore()
-	manager := auth.NewSecretManager(store)
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
 	if err := manager.SaveGoogleToken(context.Background(), auth.TokenSet{
 		AccessToken:  "expired-access-token",
 		RefreshToken: "refresh-token",
@@ -531,6 +531,19 @@ func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveGoogleToken returned error: %v", err)
 	}
+
+	ctx := context.Background()
+	dbStore, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := dbStore.Close(); err != nil {
+			t.Fatalf("dbStore.Close returned error: %v", err)
+		}
+	})
 
 	httpClient := &http.Client{
 		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -571,6 +584,8 @@ func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 		}),
 		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
 		secretManager: manager,
+		dbStore:       dbStore,
+		databaseReady: true,
 	}
 
 	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{

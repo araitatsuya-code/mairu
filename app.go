@@ -526,18 +526,20 @@ func (a *App) ExecuteGmailActions(
 		}
 	}
 
-	store, dbErr := a.requireDBStore()
+	store, storeErr := a.requireDBStore()
+	if storeErr != nil {
+		return types.ExecuteGmailActionsResult{}, fmt.Errorf("重複防止に必要な DB ストアを初期化できませんでした: %w", storeErr)
+	}
+
 	executionRequest := request
 	skippedLogEntries := make([]types.ActionLogEntry, 0)
-	if dbErr == nil {
-		executionRequest, skippedLogEntries, err = a.excludeAlreadySucceededActions(
-			baseContext,
-			store,
-			request,
-		)
-		if err != nil {
-			return types.ExecuteGmailActionsResult{}, fmt.Errorf("重複防止の事前判定に失敗しました: %w", err)
-		}
+	executionRequest, skippedLogEntries, err = a.excludeAlreadySucceededActions(
+		baseContext,
+		store,
+		request,
+	)
+	if err != nil {
+		return types.ExecuteGmailActionsResult{}, fmt.Errorf("重複防止の事前判定に失敗しました: %w", err)
 	}
 
 	result := types.ExecuteGmailActionsResult{
@@ -553,22 +555,20 @@ func (a *App) ExecuteGmailActions(
 
 	result = mergeGmailActionSkippedResult(result, len(request.Decisions), len(skippedLogEntries))
 
-	if dbErr == nil {
-		logEntries, buildErr := buildActionLogEntries(executionRequest, result)
-		if buildErr != nil {
-			log.Printf("処理ログ生成に失敗しました: %v", buildErr)
-			result.Message = result.Message + " 処理ログ保存はスキップされました。"
-		} else {
-			logEntries = append(logEntries, skippedLogEntries...)
-		}
-		if len(logEntries) > 0 {
-			logContext, logCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
-			defer logCancel()
+	logEntries, buildErr := buildActionLogEntries(executionRequest, result)
+	if buildErr != nil {
+		log.Printf("処理ログ生成に失敗しました: %v", buildErr)
+		result.Message = result.Message + " 処理ログ保存はスキップされました。"
+	} else {
+		logEntries = append(logEntries, skippedLogEntries...)
+	}
+	if len(logEntries) > 0 {
+		logContext, logCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
+		defer logCancel()
 
-			if err := store.RecordActionLogEntries(logContext, logEntries); err != nil {
-				log.Printf("処理ログ保存に失敗しました: %v", err)
-				result.Message = result.Message + " 処理ログ保存に失敗しました。"
-			}
+		if err := store.RecordActionLogEntries(logContext, logEntries); err != nil {
+			log.Printf("処理ログ保存に失敗しました: %v", err)
+			result.Message = result.Message + " 処理ログ保存に失敗しました。"
 		}
 	}
 
