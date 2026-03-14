@@ -605,6 +605,272 @@ func TestExecuteGmailActionsRefreshesToken(t *testing.T) {
 	}
 }
 
+func TestExecuteGmailActionsSkipsSucceededActionAndRecordsSkipLog(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if err := store.RecordActionLogEntries(ctx, []types.ActionLogEntry{
+		{
+			MessageID:   "msg-1",
+			ThreadID:    "thread-1",
+			From:        "sender1@example.com",
+			Subject:     "subject-1",
+			ActionKind:  types.ActionKindDelete,
+			Status:      actionLogStatusSuccess,
+			Category:    types.ClassificationCategoryJunk,
+			Confidence:  0.98,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			Source:      types.ClassificationSourceClaude,
+		},
+	}); err != nil {
+		t.Fatalf("RecordActionLogEntries returned error: %v", err)
+	}
+
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	requestCount := 0
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			requestCount++
+			if r.URL.Path != "/gmail/v1/users/me/messages/msg-2/trash" {
+				t.Fatalf("unexpected Gmail URL path: %s", r.URL.Path)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-1",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+			{
+				MessageID:   "msg-2",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+		},
+		Metadata: []types.GmailActionMetadata{
+			{
+				MessageID:   "msg-1",
+				ThreadID:    "thread-1",
+				From:        "sender1@example.com",
+				Subject:     "subject-1",
+				Category:    types.ClassificationCategoryJunk,
+				Confidence:  0.98,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+				Source:      types.ClassificationSourceClaude,
+			},
+			{
+				MessageID:   "msg-2",
+				ThreadID:    "thread-2",
+				From:        "sender2@example.com",
+				Subject:     "subject-2",
+				Category:    types.ClassificationCategoryJunk,
+				Confidence:  0.93,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+				Source:      types.ClassificationSourceClaude,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteGmailActions returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, want true (message=%q)", result.Message)
+	}
+	if result.ProcessedCount != 2 {
+		t.Fatalf("ProcessedCount = %d, want 2", result.ProcessedCount)
+	}
+	if result.SuccessCount != 1 {
+		t.Fatalf("SuccessCount = %d, want 1", result.SuccessCount)
+	}
+	if result.SkippedCount != 1 {
+		t.Fatalf("SkippedCount = %d, want 1", result.SkippedCount)
+	}
+	if !strings.Contains(result.Message, "スキップ 1 件") {
+		t.Fatalf("Message = %q, want contains skip count", result.Message)
+	}
+	if requestCount != 1 {
+		t.Fatalf("requestCount = %d, want 1", requestCount)
+	}
+
+	latestSkipped, ok, err := store.GetLatestActionLogEntry(ctx, "msg-1", types.ActionKindDelete)
+	if err != nil {
+		t.Fatalf("GetLatestActionLogEntry(msg-1) returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetLatestActionLogEntry(msg-1) ok = false, want true")
+	}
+	if latestSkipped.Status != actionLogStatusSuccess {
+		t.Fatalf("latestSkipped.Status = %q, want %q", latestSkipped.Status, actionLogStatusSuccess)
+	}
+	if !strings.Contains(latestSkipped.Detail, "重複防止") {
+		t.Fatalf("latestSkipped.Detail = %q, want contains duplicate-skip reason", latestSkipped.Detail)
+	}
+
+	latestExecuted, ok, err := store.GetLatestActionLogEntry(ctx, "msg-2", types.ActionKindDelete)
+	if err != nil {
+		t.Fatalf("GetLatestActionLogEntry(msg-2) returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetLatestActionLogEntry(msg-2) ok = false, want true")
+	}
+	if latestExecuted.Status != actionLogStatusSuccess {
+		t.Fatalf("latestExecuted.Status = %q, want %q", latestExecuted.Status, actionLogStatusSuccess)
+	}
+}
+
+func TestExecuteGmailActionsRetriesFailedAndPendingActionLogs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if err := store.RecordActionLogEntries(ctx, []types.ActionLogEntry{
+		{
+			MessageID:   "msg-failed",
+			ActionKind:  types.ActionKindDelete,
+			Status:      actionLogStatusFailed,
+			Detail:      "temporary error",
+			Category:    types.ClassificationCategoryJunk,
+			Confidence:  0.8,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			Source:      types.ClassificationSourceClaude,
+		},
+		{
+			MessageID:   "msg-pending",
+			ActionKind:  types.ActionKindDelete,
+			Status:      actionLogStatusPending,
+			Detail:      "in progress",
+			Category:    types.ClassificationCategoryJunk,
+			Confidence:  0.8,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			Source:      types.ClassificationSourceClaude,
+		},
+	}); err != nil {
+		t.Fatalf("RecordActionLogEntries returned error: %v", err)
+	}
+
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	requestCount := 0
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			requestCount++
+			if r.URL.Path != "/gmail/v1/users/me/messages/msg-failed/trash" &&
+				r.URL.Path != "/gmail/v1/users/me/messages/msg-pending/trash" {
+				t.Fatalf("unexpected Gmail URL path: %s", r.URL.Path)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-failed",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+			{
+				MessageID:   "msg-pending",
+				Category:    types.ClassificationCategoryJunk,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+		},
+		Metadata: []types.GmailActionMetadata{
+			{
+				MessageID:   "msg-failed",
+				Category:    types.ClassificationCategoryJunk,
+				Confidence:  0.8,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+				Source:      types.ClassificationSourceClaude,
+			},
+			{
+				MessageID:   "msg-pending",
+				Category:    types.ClassificationCategoryJunk,
+				Confidence:  0.8,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+				Source:      types.ClassificationSourceClaude,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteGmailActions returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, want true (message=%q)", result.Message)
+	}
+	if result.SuccessCount != 2 {
+		t.Fatalf("SuccessCount = %d, want 2", result.SuccessCount)
+	}
+	if result.SkippedCount != 0 {
+		t.Fatalf("SkippedCount = %d, want 0", result.SkippedCount)
+	}
+	if requestCount != 2 {
+		t.Fatalf("requestCount = %d, want 2", requestCount)
+	}
+}
+
 func TestGetRuntimeStatusReadsSchedulerLastRunAt(t *testing.T) {
 	t.Parallel()
 
@@ -736,6 +1002,28 @@ func TestBuildSchedulerNotificationWithPendingApproval(t *testing.T) {
 	}
 	if !strings.Contains(notification.Body, "承認待ち 2件") {
 		t.Fatalf("Body = %q, want contains pending summary", notification.Body)
+	}
+}
+
+func TestBuildSchedulerNotificationIncludesSkippedCount(t *testing.T) {
+	t.Parallel()
+
+	notification, ok := buildSchedulerNotification(scheduler.Event{
+		JobID: schedulerJobClassification,
+		Kind:  scheduler.EventKindSucceeded,
+		Result: scheduler.Result{
+			Processed:       10,
+			Success:         5,
+			Failed:          1,
+			PendingApproval: 2,
+			Message:         "分類を完了しました。",
+		},
+	})
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if !strings.Contains(notification.Body, "スキップ 2件") {
+		t.Fatalf("Body = %q, want contains skipped summary", notification.Body)
 	}
 }
 

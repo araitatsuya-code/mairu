@@ -55,6 +55,10 @@ const (
 	schedulerCheckpointModeSafeRun      = "safe-run"
 
 	schedulerMessageMissingClassificationLastRun = "last_run_at 未設定のため、定期 safe-run は backlog 全量を自動実行しません。Classify 画面で手動実行して開始時刻を確定してください。"
+	actionLogStatusPending                       = "pending"
+	actionLogStatusSuccess                       = "success"
+	actionLogStatusFailed                        = "failed"
+	actionLogDetailDuplicateSkip                 = "重複防止: action_logs の最新 status=success のため Gmail 反映をスキップしました。"
 
 	schedulerNotificationEventName = "scheduler:notification"
 )
@@ -522,18 +526,42 @@ func (a *App) ExecuteGmailActions(
 		}
 	}
 
-	result, err := a.gmailClient.ExecuteActions(baseContext, token.AccessToken, request.Decisions)
-	if err != nil {
-		return types.ExecuteGmailActionsResult{}, err
+	store, dbErr := a.requireDBStore()
+	executionRequest := request
+	skippedLogEntries := make([]types.ActionLogEntry, 0)
+	if dbErr == nil {
+		executionRequest, skippedLogEntries, err = a.excludeAlreadySucceededActions(
+			baseContext,
+			store,
+			request,
+		)
+		if err != nil {
+			return types.ExecuteGmailActionsResult{}, fmt.Errorf("重複防止の事前判定に失敗しました: %w", err)
+		}
 	}
 
-	store, dbErr := a.requireDBStore()
+	result := types.ExecuteGmailActionsResult{
+		Success: true,
+		Message: "実行対象がありませんでした。",
+	}
+	if len(executionRequest.Decisions) > 0 {
+		result, err = a.gmailClient.ExecuteActions(baseContext, token.AccessToken, executionRequest.Decisions)
+		if err != nil {
+			return types.ExecuteGmailActionsResult{}, err
+		}
+	}
+
+	result = mergeGmailActionSkippedResult(result, len(request.Decisions), len(skippedLogEntries))
+
 	if dbErr == nil {
-		logEntries, buildErr := buildActionLogEntries(request, result)
+		logEntries, buildErr := buildActionLogEntries(executionRequest, result)
 		if buildErr != nil {
 			log.Printf("処理ログ生成に失敗しました: %v", buildErr)
 			result.Message = result.Message + " 処理ログ保存はスキップされました。"
-		} else if len(logEntries) > 0 {
+		} else {
+			logEntries = append(logEntries, skippedLogEntries...)
+		}
+		if len(logEntries) > 0 {
 			logContext, logCancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
 			defer logCancel()
 
@@ -1514,33 +1542,37 @@ func buildScheduledClassificationSummary(
 	processedPageCount int,
 	initialCompletedBatches int,
 ) string {
+	skippedCount := schedulerResultSkippedCount(aggregated)
 	if initialCompletedBatches <= 0 {
 		return fmt.Sprintf(
-			"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+			"新着 %d 件を %d ページで処理しました。完了 %d件 / 失敗 %d件 / 承認待ち %d件 / スキップ %d件。",
 			currentProcessedCount,
 			processedPageCount,
 			aggregated.Success,
 			aggregated.Failed,
 			aggregated.PendingApproval,
+			skippedCount,
 		)
 	}
 	if currentProcessedCount == 0 {
 		return fmt.Sprintf(
-			"checkpoint から再開しましたが、追加処理対象はありませんでした（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+			"checkpoint から再開しましたが、追加処理対象はありませんでした（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件 / スキップ %d件。",
 			initialCompletedBatches,
 			aggregated.Success,
 			aggregated.Failed,
 			aggregated.PendingApproval,
+			skippedCount,
 		)
 	}
 	return fmt.Sprintf(
-		"checkpoint から再開し、今回 %d 件を %d ページで追加処理しました（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件。",
+		"checkpoint から再開し、今回 %d 件を %d ページで追加処理しました（スキップ %d ページ）。累計: 完了 %d件 / 失敗 %d件 / 承認待ち %d件 / スキップ %d件。",
 		currentProcessedCount,
 		processedPageCount,
 		initialCompletedBatches,
 		aggregated.Success,
 		aggregated.Failed,
 		aggregated.PendingApproval,
+		skippedCount,
 	)
 }
 
@@ -2060,12 +2092,13 @@ func (a *App) logSchedulerEvent(event scheduler.Event) {
 			log.Printf("[scheduler] job=%s last_run 保存に失敗しました: %v", event.JobID, err)
 		}
 		log.Printf(
-			"[scheduler] job=%s succeeded processed=%d success=%d failed=%d pending=%d message=%s",
+			"[scheduler] job=%s succeeded processed=%d success=%d failed=%d pending=%d skipped=%d message=%s",
 			event.JobID,
 			event.Result.Processed,
 			event.Result.Success,
 			event.Result.Failed,
 			event.Result.PendingApproval,
+			schedulerResultSkippedCount(event.Result),
 			event.Result.Message,
 		)
 		a.emitSchedulerNotification(event)
@@ -2128,10 +2161,11 @@ func buildSchedulerNotification(event scheduler.Event) (types.SchedulerNotificat
 
 	jobName := schedulerJobDisplayName(event.JobID)
 	summary := fmt.Sprintf(
-		"完了 %d件 / 失敗 %d件 / 承認待ち %d件",
+		"完了 %d件 / 失敗 %d件 / 承認待ち %d件 / スキップ %d件",
 		event.Result.Success,
 		event.Result.Failed,
 		event.Result.PendingApproval,
+		schedulerResultSkippedCount(event.Result),
 	)
 
 	switch event.Kind {
@@ -2434,13 +2468,9 @@ func buildActionLogEntries(
 	request types.ExecuteGmailActionsRequest,
 	result types.ExecuteGmailActionsResult,
 ) ([]types.ActionLogEntry, error) {
-	metadataByID := make(map[string]types.GmailActionMetadata, len(request.Metadata))
-	for _, item := range request.Metadata {
-		messageID := strings.TrimSpace(item.MessageID)
-		if messageID == "" {
-			return nil, errors.New("action metadata の message_id が空です")
-		}
-		metadataByID[messageID] = item
+	metadataByID, err := buildActionMetadataMap(request.Metadata)
+	if err != nil {
+		return nil, err
 	}
 
 	failureByID := make(map[string]types.GmailActionFailure, len(result.Failures))
@@ -2451,44 +2481,165 @@ func buildActionLogEntries(
 	entries := make([]types.ActionLogEntry, 0, len(request.Decisions))
 	for _, decision := range request.Decisions {
 		messageID := strings.TrimSpace(decision.MessageID)
-		metadata := metadataByID[messageID]
-		category := metadata.Category
-		if !category.IsValid() {
-			category = decision.Category
-		}
-		reviewLevel := metadata.ReviewLevel
-		if !reviewLevel.IsValid() {
-			reviewLevel = decision.ReviewLevel
-		}
-		source := metadata.Source
-		if !source.IsValid() {
-			source = types.ClassificationSourceClaude
-		}
-
-		entry := types.ActionLogEntry{
-			MessageID:   messageID,
-			ThreadID:    strings.TrimSpace(metadata.ThreadID),
-			From:        strings.TrimSpace(metadata.From),
-			Subject:     strings.TrimSpace(metadata.Subject),
-			ActionKind:  primaryActionKindForDecision(decision),
-			Status:      "success",
-			Detail:      "",
-			Category:    category,
-			Confidence:  metadata.Confidence,
-			ReviewLevel: reviewLevel,
-			Source:      source,
-		}
+		entry := buildActionLogEntry(decision, metadataByID[messageID], actionLogStatusSuccess, "")
 
 		if failure, failed := failureByID[messageID]; failed {
 			entry.ActionKind = failure.Action
-			entry.Status = "failed"
-			entry.Detail = failure.Error
+			entry.Status = actionLogStatusFailed
+			entry.Detail = strings.TrimSpace(failure.Error)
 		}
 
 		entries = append(entries, entry)
 	}
 
 	return entries, nil
+}
+
+func (a *App) excludeAlreadySucceededActions(
+	ctx context.Context,
+	store *db.Store,
+	request types.ExecuteGmailActionsRequest,
+) (types.ExecuteGmailActionsRequest, []types.ActionLogEntry, error) {
+	metadataByID, err := buildActionMetadataMap(request.Metadata)
+	if err != nil {
+		return types.ExecuteGmailActionsRequest{}, nil, err
+	}
+
+	filteredDecisions := make([]types.GmailActionDecision, 0, len(request.Decisions))
+	filteredMetadata := make([]types.GmailActionMetadata, 0, len(request.Metadata))
+	skippedEntries := make([]types.ActionLogEntry, 0)
+
+	for _, decision := range request.Decisions {
+		messageID := strings.TrimSpace(decision.MessageID)
+		actionKind := primaryActionKindForDecision(decision)
+		latest, found, err := store.GetLatestActionLogEntry(ctx, messageID, actionKind)
+		if err != nil {
+			return types.ExecuteGmailActionsRequest{}, nil, err
+		}
+		if found {
+			status := normalizedActionLogStatus(latest.Status)
+			if status == actionLogStatusSuccess {
+				log.Printf(
+					"Gmail アクション重複防止: message_id=%s action=%s status=success のためスキップ",
+					messageID,
+					actionKind,
+				)
+				skippedEntries = append(
+					skippedEntries,
+					buildActionLogEntry(decision, metadataByID[messageID], actionLogStatusSuccess, actionLogDetailDuplicateSkip),
+				)
+				continue
+			}
+			if status == actionLogStatusFailed || status == actionLogStatusPending {
+				log.Printf(
+					"Gmail アクション再試行: message_id=%s action=%s status=%s のため再実行",
+					messageID,
+					actionKind,
+					status,
+				)
+			}
+		}
+
+		filteredDecisions = append(filteredDecisions, decision)
+		if metadata, ok := metadataByID[messageID]; ok {
+			filteredMetadata = append(filteredMetadata, metadata)
+		}
+	}
+
+	return types.ExecuteGmailActionsRequest{
+		Confirmed: request.Confirmed,
+		Decisions: filteredDecisions,
+		Metadata:  filteredMetadata,
+	}, skippedEntries, nil
+}
+
+func mergeGmailActionSkippedResult(
+	result types.ExecuteGmailActionsResult,
+	totalDecisions int,
+	skippedCount int,
+) types.ExecuteGmailActionsResult {
+	if totalDecisions > 0 {
+		result.ProcessedCount = totalDecisions
+	}
+	result.SkippedCount = skippedCount
+	if skippedCount <= 0 {
+		return result
+	}
+
+	baseMessage := strings.TrimSpace(result.Message)
+	if result.SuccessCount == 0 && result.FailureCount == 0 {
+		result.Success = true
+		result.Message = fmt.Sprintf("Gmail アクション %d 件を重複防止のためスキップしました。", skippedCount)
+		return result
+	}
+
+	if baseMessage == "" {
+		baseMessage = "Gmail アクションを実行しました。"
+	}
+	result.Message = fmt.Sprintf("%s スキップ %d 件（既存 success を検出）。", baseMessage, skippedCount)
+	return result
+}
+
+func buildActionMetadataMap(
+	metadata []types.GmailActionMetadata,
+) (map[string]types.GmailActionMetadata, error) {
+	metadataByID := make(map[string]types.GmailActionMetadata, len(metadata))
+	for _, item := range metadata {
+		messageID := strings.TrimSpace(item.MessageID)
+		if messageID == "" {
+			return nil, errors.New("action metadata の message_id が空です")
+		}
+		metadataByID[messageID] = item
+	}
+	return metadataByID, nil
+}
+
+func buildActionLogEntry(
+	decision types.GmailActionDecision,
+	metadata types.GmailActionMetadata,
+	status string,
+	detail string,
+) types.ActionLogEntry {
+	category := metadata.Category
+	if !category.IsValid() {
+		category = decision.Category
+	}
+	reviewLevel := metadata.ReviewLevel
+	if !reviewLevel.IsValid() {
+		reviewLevel = decision.ReviewLevel
+	}
+	source := metadata.Source
+	if !source.IsValid() {
+		source = types.ClassificationSourceClaude
+	}
+
+	return types.ActionLogEntry{
+		MessageID:   strings.TrimSpace(decision.MessageID),
+		ThreadID:    strings.TrimSpace(metadata.ThreadID),
+		From:        strings.TrimSpace(metadata.From),
+		Subject:     strings.TrimSpace(metadata.Subject),
+		ActionKind:  primaryActionKindForDecision(decision),
+		Status:      actionLogStatusOrSuccess(status),
+		Detail:      strings.TrimSpace(detail),
+		Category:    category,
+		Confidence:  metadata.Confidence,
+		ReviewLevel: reviewLevel,
+		Source:      source,
+	}
+}
+
+func normalizedActionLogStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+func actionLogStatusOrSuccess(status string) string {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
+	case actionLogStatusPending, actionLogStatusFailed:
+		return normalized
+	default:
+		return actionLogStatusSuccess
+	}
 }
 
 func buildExportFilename(prefix string, now time.Time, extension string) string {
