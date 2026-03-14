@@ -1827,6 +1827,123 @@ func TestRunScheduledClassificationStoresCheckpointOnFirstBatchFailure(t *testin
 	}
 }
 
+func TestRunScheduledClassificationDoesNotMutateAggregatedWhenCheckpointSaveFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if closed {
+			return
+		}
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	secretStore := auth.NewMemorySecretStore()
+	secretManager := auth.NewSecretManager(secretStore)
+	if err := secretManager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+	if err := secretManager.SaveClaudeAPIKey(ctx, "claude-api-key"); err != nil {
+		t.Fatalf("SaveClaudeAPIKey returned error: %v", err)
+	}
+
+	lastRunAt := time.Date(2026, time.March, 8, 9, 0, 0, 0, time.UTC)
+	if err := store.SetSetting(
+		ctx,
+		fmt.Sprintf(schedulerSettingLastRunTemplate, schedulerJobClassification),
+		lastRunAt.Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("SetSetting(job last_run_at) returned error: %v", err)
+	}
+
+	app := &App{
+		ctx:           ctx,
+		authClient:    auth.NewClient(auth.Config{}),
+		secretManager: secretManager,
+		gmailClient: gmail.NewClient(gmail.Options{
+			BaseURL: "https://gmail.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+					switch r.URL.Path {
+					case "/gmail/v1/users/me/messages":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"messages":[{"id":"m1","threadId":"t1"}]
+							}`)),
+						}, nil
+					case "/gmail/v1/users/me/messages/m1":
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header: http.Header{
+								"Content-Type": []string{"application/json"},
+							},
+							Body: io.NopCloser(strings.NewReader(`{
+								"id":"m1",
+								"threadId":"t1",
+								"snippet":"one",
+								"labelIds":["INBOX","UNREAD"],
+								"payload":{"headers":[{"name":"From","value":"one@example.com"},{"name":"Subject","value":"one"}]}
+							}`)),
+						}, nil
+					default:
+						t.Fatalf("unexpected Gmail URL: %s", r.URL.String())
+						return nil, nil
+					}
+				}),
+			},
+		}),
+		claudeClient: claude.NewClient(claude.Options{
+			BaseURL: "https://claude.test",
+			HTTPClient: &http.Client{
+				Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
+					if err := store.Close(); err != nil {
+						t.Fatalf("store.Close returned error: %v", err)
+					}
+					closed = true
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header: http.Header{
+							"Content-Type": []string{"application/json"},
+						},
+						Body: io.NopCloser(strings.NewReader(`{
+							"content":[{"type":"text","text":"{\"results\":[{\"id\":\"m1\",\"category\":\"important\",\"confidence\":0.8,\"reason\":\"review\"}]}"}]
+						}`)),
+					}, nil
+				}),
+			},
+		}),
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.runScheduledClassification(ctx)
+	if err == nil {
+		t.Fatalf("runScheduledClassification error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "分類 checkpoint を保存できませんでした") {
+		t.Fatalf("error = %v, want checkpoint save error", err)
+	}
+	if result.Processed != 0 {
+		t.Fatalf("result.Processed = %d, want 0", result.Processed)
+	}
+	if result.PendingApproval != 0 {
+		t.Fatalf("result.PendingApproval = %d, want 0", result.PendingApproval)
+	}
+}
+
 func TestMaybeMarkSchedulerRetryableRecognizesParenthesizedStatus(t *testing.T) {
 	t.Parallel()
 

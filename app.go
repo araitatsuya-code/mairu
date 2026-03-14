@@ -1448,23 +1448,28 @@ func (a *App) runScheduledClassification(ctx context.Context) (scheduler.Result,
 			return failed, maybeMarkSchedulerRetryable(err)
 		}
 
-		aggregated.Processed += pageResult.Processed
-		aggregated.Success += pageResult.Success
-		aggregated.Failed += pageResult.Failed
-		aggregated.PendingApproval += pageResult.PendingApproval
-		currentProcessedCount += pageResult.Processed
-		checkpoint.CompletedBatches++
-		checkpoint.Processed = aggregated.Processed
-		checkpoint.Success = aggregated.Success
-		checkpoint.Failed = aggregated.Failed
-		checkpoint.PendingApproval = aggregated.PendingApproval
-		checkpoint.Skipped += schedulerResultSkippedCount(pageResult)
-		checkpoint.LastStopReason = ""
-		checkpoint.LastError = ""
-		checkpoint.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := a.saveClassificationCheckpoint(checkpoint); err != nil {
+		nextAggregated := aggregated
+		nextAggregated.Processed += pageResult.Processed
+		nextAggregated.Success += pageResult.Success
+		nextAggregated.Failed += pageResult.Failed
+		nextAggregated.PendingApproval += pageResult.PendingApproval
+		nextCurrentProcessedCount := currentProcessedCount + pageResult.Processed
+		nextCheckpoint := checkpoint
+		nextCheckpoint.CompletedBatches++
+		nextCheckpoint.Processed = nextAggregated.Processed
+		nextCheckpoint.Success = nextAggregated.Success
+		nextCheckpoint.Failed = nextAggregated.Failed
+		nextCheckpoint.PendingApproval = nextAggregated.PendingApproval
+		nextCheckpoint.Skipped += schedulerResultSkippedCount(pageResult)
+		nextCheckpoint.LastStopReason = ""
+		nextCheckpoint.LastError = ""
+		nextCheckpoint.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := a.saveClassificationCheckpoint(nextCheckpoint); err != nil {
 			return aggregated, fmt.Errorf("分類 checkpoint を保存できませんでした: %w", err)
 		}
+		aggregated = nextAggregated
+		currentProcessedCount = nextCurrentProcessedCount
+		checkpoint = nextCheckpoint
 
 		nextPageToken := strings.TrimSpace(fetched.NextPageToken)
 		if nextPageToken == "" {
