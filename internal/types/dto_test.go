@@ -156,3 +156,30 @@ func TestBlocklistKindIsValid(t *testing.T) {
 		t.Fatalf("BlocklistKind(\"unknown\").IsValid() = true, want false")
 	}
 }
+
+func TestGWSCLIErrorKindValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		got  GWSCLIErrorKind
+		want GWSCLIErrorKind
+	}{
+		{name: "none", got: GWSCLIErrorKindNone, want: "none"},
+		{name: "not installed", got: GWSCLIErrorKindNotInstalled, want: "not_installed"},
+		{name: "auth", got: GWSCLIErrorKindAuth, want: "auth"},
+		{name: "invalid command", got: GWSCLIErrorKindInvalidCommand, want: "invalid_command"},
+		{name: "timeout", got: GWSCLIErrorKindTimeout, want: "timeout"},
+		{name: "execution", got: GWSCLIErrorKindExecution, want: "execution"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.got != tt.want {
+				t.Fatalf("unexpected gws error kind value: got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}

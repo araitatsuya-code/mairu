@@ -9,6 +9,8 @@ export type RuntimeStatus = {
     claudeConfigured: boolean;
     claudeStatus: string;
     claudeKeyPreview: string;
+    gwsAvailable: boolean;
+    gwsStatus: string;
     databaseReady: boolean;
     lastRunAt: string | null;
 };
@@ -160,6 +162,39 @@ export type OperationResult = {
     message: string;
 };
 
+export type GWSCLIErrorKind =
+    | 'none'
+    | 'not_installed'
+    | 'auth'
+    | 'invalid_command'
+    | 'timeout'
+    | 'execution';
+
+export type GWSDiagnosticsResult = {
+    success: boolean;
+    available: boolean;
+    message: string;
+    binaryPath: string;
+    version: string;
+    command: string;
+    output: string;
+    errorKind: GWSCLIErrorKind;
+};
+
+export type GWSGmailDryRunRequest = {
+    query: string;
+    maxResults: number;
+};
+
+export type GWSGmailDryRunResult = {
+    success: boolean;
+    message: string;
+    binaryPath: string;
+    command: string;
+    output: string;
+    errorKind: GWSCLIErrorKind;
+};
+
 export type SchedulerSettings = {
     classificationIntervalMinutes: number;
     blocklistIntervalMinutes: number;
@@ -203,6 +238,8 @@ type WailsAppApi = {
               ClaudeConfigured: boolean;
               ClaudeStatus: string;
               ClaudeKeyPreview?: string;
+              GWSAvailable?: boolean;
+              GWSStatus?: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           }>
@@ -217,6 +254,8 @@ type WailsAppApi = {
               ClaudeConfigured: boolean;
               ClaudeStatus: string;
               ClaudeKeyPreview?: string;
+              GWSAvailable?: boolean;
+              GWSStatus?: string;
               DatabaseReady: boolean;
               LastRunAt?: string | null;
           };
@@ -338,6 +377,47 @@ type WailsAppApi = {
               ThreadsTotal?: number;
               HistoryID?: string;
               TokenRefreshed?: boolean;
+          };
+    CheckGWSDiagnostics?: () =>
+        | Promise<{
+              Success: boolean;
+              Available?: boolean;
+              Message: string;
+              BinaryPath?: string;
+              Version?: string;
+              Command?: string;
+              Output?: string;
+              ErrorKind?: GWSCLIErrorKind;
+          }>
+        | {
+              Success: boolean;
+              Available?: boolean;
+              Message: string;
+              BinaryPath?: string;
+              Version?: string;
+              Command?: string;
+              Output?: string;
+              ErrorKind?: GWSCLIErrorKind;
+          };
+    PreviewGWSGmailDryRun?: (request: {
+        Query: string;
+        MaxResults: number;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+              BinaryPath?: string;
+              Command?: string;
+              Output?: string;
+              ErrorKind?: GWSCLIErrorKind;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+              BinaryPath?: string;
+              Command?: string;
+              Output?: string;
+              ErrorKind?: GWSCLIErrorKind;
           };
     ExecuteGmailActions?: (request: {
         Confirmed: boolean;
@@ -544,6 +624,8 @@ export const defaultRuntimeStatus: RuntimeStatus = {
     claudeConfigured: false,
     claudeStatus: 'Claude API キー状態を確認しています。',
     claudeKeyPreview: '',
+    gwsAvailable: false,
+    gwsStatus: 'gws は未導入です。必要な場合のみインストールしてください。',
     databaseReady: false,
     lastRunAt: null,
 };
@@ -591,6 +673,8 @@ export async function loadRuntimeStatus(): Promise<RuntimeStatus> {
         claudeConfigured: raw.ClaudeConfigured,
         claudeStatus: raw.ClaudeStatus,
         claudeKeyPreview: raw.ClaudeKeyPreview ?? '',
+        gwsAvailable: raw.GWSAvailable ?? false,
+        gwsStatus: raw.GWSStatus ?? defaultRuntimeStatus.gwsStatus,
         databaseReady: raw.DatabaseReady,
         lastRunAt: raw.LastRunAt ?? null,
     };
@@ -751,6 +835,51 @@ export async function checkGmailConnection(): Promise<GmailConnectionResult> {
         threadsTotal: raw.ThreadsTotal ?? 0,
         historyID: raw.HistoryID ?? '',
         tokenRefreshed: raw.TokenRefreshed ?? false,
+    };
+}
+
+export async function checkGWSDiagnostics(): Promise<GWSDiagnosticsResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.CheckGWSDiagnostics?.();
+
+    if (!result) {
+        throw new Error('gws 診断 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        available: raw.Available ?? false,
+        message: raw.Message,
+        binaryPath: raw.BinaryPath ?? '',
+        version: raw.Version ?? '',
+        command: raw.Command ?? '',
+        output: raw.Output ?? '',
+        errorKind: raw.ErrorKind ?? 'execution',
+    };
+}
+
+export async function previewGWSGmailDryRun(
+    request: GWSGmailDryRunRequest,
+): Promise<GWSGmailDryRunResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.PreviewGWSGmailDryRun?.({
+        Query: request.query,
+        MaxResults: request.maxResults,
+    });
+
+    if (!result) {
+        throw new Error('gws Gmail dry-run API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+        binaryPath: raw.BinaryPath ?? '',
+        command: raw.Command ?? '',
+        output: raw.Output ?? '',
+        errorKind: raw.ErrorKind ?? 'execution',
     };
 }
 

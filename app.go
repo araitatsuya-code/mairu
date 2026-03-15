@@ -20,6 +20,7 @@ import (
 	"mairu/internal/db"
 	"mairu/internal/exporter"
 	"mairu/internal/gmail"
+	"mairu/internal/gws"
 	"mairu/internal/scheduler"
 	"mairu/internal/types"
 )
@@ -28,6 +29,7 @@ const (
 	gmailConnectionTimeout      = 15 * time.Second
 	gmailActionTimeout          = 45 * time.Second
 	claudeClassificationTimeout = 45 * time.Second
+	gwsCommandTimeout           = 20 * time.Second
 	dbOperationTimeout          = 10 * time.Second
 	blocklistSuggestionMinimum  = 3
 	defaultExportDirName        = "Downloads"
@@ -85,6 +87,7 @@ type App struct {
 	authClient    *auth.Client
 	claudeClient  *claude.Client
 	gmailClient   *gmail.Client
+	gwsClient     *gws.Client
 	secretManager *auth.SecretManager
 	dbStore       *db.Store
 
@@ -121,6 +124,7 @@ func NewApp() *App {
 			DefaultModel: claudeModel,
 		}),
 		gmailClient:   gmail.NewClient(gmail.Options{}),
+		gwsClient:     gws.NewClient(gws.Options{}),
 		secretManager: secretManager,
 		eventsEmit:    runtime.EventsEmit,
 	}
@@ -171,6 +175,8 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 	googleConfigured := a.authClient.IsConfigured()
 	googleTokenPreview := ""
 	claudeKeyPreview := ""
+	gwsStatus := buildUnavailableGWSStatusMessage()
+	gwsAvailable := false
 
 	authorized, err := a.secretManager.HasGoogleToken(baseContext)
 	if err != nil {
@@ -218,6 +224,16 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		claudeStatus = buildUnstoredClaudeStatusMessage()
 	}
 
+	if a.gwsClient != nil {
+		detection := a.gwsClient.Detect()
+		gwsAvailable = detection.Available
+		if detection.Available {
+			gwsStatus = buildAvailableGWSStatusMessage(detection.BinaryPath)
+		} else if strings.TrimSpace(detection.Message) != "" {
+			gwsStatus = detection.Message
+		}
+	}
+
 	return types.RuntimeStatus{
 		Authorized:         authorized,
 		GoogleConfigured:   googleConfigured,
@@ -229,6 +245,8 @@ func (a *App) GetRuntimeStatus() types.RuntimeStatus {
 		ClaudeConfigured:   claudeConfigured,
 		ClaudeStatus:       claudeStatus,
 		ClaudeKeyPreview:   claudeKeyPreview,
+		GWSAvailable:       gwsAvailable,
+		GWSStatus:          gwsStatus,
 		DatabaseReady:      databaseReady,
 		LastRunAt:          lastRunAt,
 	}
@@ -488,6 +506,61 @@ func (a *App) CheckGmailConnection() types.GmailConnectionResult {
 		ThreadsTotal:   profile.ThreadsTotal,
 		HistoryID:      profile.HistoryID,
 		TokenRefreshed: refreshed,
+	}
+}
+
+// CheckGWSDiagnostics は gws の導入状態とバージョン取得を診断する。
+func (a *App) CheckGWSDiagnostics() types.GWSDiagnosticsResult {
+	if a.gwsClient == nil {
+		return types.GWSDiagnosticsResult{
+			Success:   false,
+			Available: false,
+			Message:   "gws クライアントが初期化されていません。",
+			ErrorKind: types.GWSCLIErrorKindExecution,
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), gwsCommandTimeout)
+	defer cancel()
+
+	result := a.gwsClient.Diagnose(ctx)
+	return types.GWSDiagnosticsResult{
+		Success:    result.Success,
+		Available:  result.Available,
+		Message:    result.Message,
+		BinaryPath: result.BinaryPath,
+		Version:    result.Version,
+		Command:    result.Command,
+		Output:     result.Output,
+		ErrorKind:  mapGWSErrorKind(result.ErrorKind),
+	}
+}
+
+// PreviewGWSGmailDryRun は gws Gmail read-only dry-run の PoC を実行する。
+func (a *App) PreviewGWSGmailDryRun(request types.GWSGmailDryRunRequest) types.GWSGmailDryRunResult {
+	if a.gwsClient == nil {
+		return types.GWSGmailDryRunResult{
+			Success:   false,
+			Message:   "gws クライアントが初期化されていません。",
+			ErrorKind: types.GWSCLIErrorKindExecution,
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(a.baseContext(), gwsCommandTimeout)
+	defer cancel()
+
+	result := a.gwsClient.RunGmailListDryRun(ctx, gws.GmailDryRunRequest{
+		Query:      request.Query,
+		MaxResults: request.MaxResults,
+	})
+
+	return types.GWSGmailDryRunResult{
+		Success:    result.Success,
+		Message:    result.Message,
+		BinaryPath: result.BinaryPath,
+		Command:    result.Command,
+		Output:     result.Output,
+		ErrorKind:  mapGWSErrorKind(result.ErrorKind),
 	}
 }
 
@@ -1103,9 +1176,38 @@ func buildUnstoredClaudeStatusMessage() string {
 	return "Claude API キーを保存すると、次の分類機能から利用できます。"
 }
 
+func buildAvailableGWSStatusMessage(binaryPath string) string {
+	trimmed := strings.TrimSpace(binaryPath)
+	if trimmed == "" {
+		return "gws を利用できます。"
+	}
+	return fmt.Sprintf("gws を利用できます (%s)", trimmed)
+}
+
+func buildUnavailableGWSStatusMessage() string {
+	return "gws は未導入です。必要な場合のみインストールしてください。"
+}
+
 func buildCredentialErrorMessage(prefix string, err error) string {
 	log.Printf("%s detail=%v", prefix, err)
 	return prefix + " 詳細はアプリのログを確認してください。"
+}
+
+func mapGWSErrorKind(kind gws.ErrorKind) types.GWSCLIErrorKind {
+	switch kind {
+	case gws.ErrorKindNone:
+		return types.GWSCLIErrorKindNone
+	case gws.ErrorKindNotInstalled:
+		return types.GWSCLIErrorKindNotInstalled
+	case gws.ErrorKindAuth:
+		return types.GWSCLIErrorKindAuth
+	case gws.ErrorKindInvalidCommand:
+		return types.GWSCLIErrorKindInvalidCommand
+	case gws.ErrorKindTimeout:
+		return types.GWSCLIErrorKindTimeout
+	default:
+		return types.GWSCLIErrorKindExecution
+	}
 }
 
 func shouldUseStoredAuthMessage(message string) bool {
