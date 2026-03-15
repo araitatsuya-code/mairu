@@ -34,6 +34,14 @@ const (
 	ClassificationReasonHintMinimum = 0.50
 )
 
+const (
+	DefaultClassificationLabelImportant      = "Mairu/Important"
+	DefaultClassificationLabelNewsletter     = "Mairu/Newsletter"
+	DefaultClassificationLabelArchive        = "Mairu/Archive"
+	DefaultClassificationLabelUnreadPriority = "Mairu/Unread Priority"
+	DefaultClassificationLabelNeedsReview    = "Mairu/Needs Review"
+)
+
 // IsValid は既知の分類カテゴリかを判定する。
 func (c ClassificationCategory) IsValid() bool {
 	switch c {
@@ -101,6 +109,58 @@ func ReviewLevelForConfidence(confidence float64) ClassificationReviewLevel {
 	default:
 		return ClassificationReviewLevelHold
 	}
+}
+
+// ClassificationLabelSettings は自動分別時に使う Gmail ラベル名の設定を表す。
+type ClassificationLabelSettings struct {
+	ImportantLabelName      string
+	NewsletterLabelName     string
+	ArchiveLabelName        string
+	UnreadPriorityLabelName string
+	NeedsReviewLabelName    string
+}
+
+// UpdateClassificationLabelSettingsRequest は分類ラベル設定の更新入力を表す。
+type UpdateClassificationLabelSettingsRequest struct {
+	ImportantLabelName      string
+	NewsletterLabelName     string
+	ArchiveLabelName        string
+	UnreadPriorityLabelName string
+	NeedsReviewLabelName    string
+}
+
+// DefaultClassificationLabelSettings は分類ラベル設定の既定値を返す。
+func DefaultClassificationLabelSettings() ClassificationLabelSettings {
+	return ClassificationLabelSettings{
+		ImportantLabelName:      DefaultClassificationLabelImportant,
+		NewsletterLabelName:     DefaultClassificationLabelNewsletter,
+		ArchiveLabelName:        DefaultClassificationLabelArchive,
+		UnreadPriorityLabelName: DefaultClassificationLabelUnreadPriority,
+		NeedsReviewLabelName:    DefaultClassificationLabelNeedsReview,
+	}
+}
+
+// NormalizeClassificationLabelSettings は空欄や空白のみを既定値へ補完する。
+func NormalizeClassificationLabelSettings(
+	settings ClassificationLabelSettings,
+) ClassificationLabelSettings {
+	defaults := DefaultClassificationLabelSettings()
+
+	return ClassificationLabelSettings{
+		ImportantLabelName:      normalizeClassificationLabel(settings.ImportantLabelName, defaults.ImportantLabelName),
+		NewsletterLabelName:     normalizeClassificationLabel(settings.NewsletterLabelName, defaults.NewsletterLabelName),
+		ArchiveLabelName:        normalizeClassificationLabel(settings.ArchiveLabelName, defaults.ArchiveLabelName),
+		UnreadPriorityLabelName: normalizeClassificationLabel(settings.UnreadPriorityLabelName, defaults.UnreadPriorityLabelName),
+		NeedsReviewLabelName:    normalizeClassificationLabel(settings.NeedsReviewLabelName, defaults.NeedsReviewLabelName),
+	}
+}
+
+func normalizeClassificationLabel(value string, fallback string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
 }
 
 // ClassificationRequest は Claude 分類 API 呼び出し入力を表す。

@@ -248,6 +248,16 @@ export type SchedulerSettings = {
 
 export type UpdateSchedulerSettingsRequest = SchedulerSettings;
 
+export type ClassificationLabelSettings = {
+    importantLabelName: string;
+    newsletterLabelName: string;
+    archiveLabelName: string;
+    unreadPriorityLabelName: string;
+    needsReviewLabelName: string;
+};
+
+export type UpdateClassificationLabelSettingsRequest = ClassificationLabelSettings;
+
 export type SchedulerNotification = {
     title: string;
     body: string;
@@ -321,6 +331,36 @@ type WailsAppApi = {
         BlocklistIntervalMinutes: number;
         KnownBlockIntervalMinutes: number;
         NotificationsEnabled: boolean;
+    }) =>
+        | Promise<{
+              Success: boolean;
+              Message: string;
+          }>
+        | {
+              Success: boolean;
+              Message: string;
+          };
+    GetClassificationLabelSettings?: () =>
+        | Promise<{
+              ImportantLabelName?: string;
+              NewsletterLabelName?: string;
+              ArchiveLabelName?: string;
+              UnreadPriorityLabelName?: string;
+              NeedsReviewLabelName?: string;
+          }>
+        | {
+              ImportantLabelName?: string;
+              NewsletterLabelName?: string;
+              ArchiveLabelName?: string;
+              UnreadPriorityLabelName?: string;
+              NeedsReviewLabelName?: string;
+          };
+    UpdateClassificationLabelSettings?: (request: {
+        ImportantLabelName: string;
+        NewsletterLabelName: string;
+        ArchiveLabelName: string;
+        UnreadPriorityLabelName: string;
+        NeedsReviewLabelName: string;
     }) =>
         | Promise<{
               Success: boolean;
@@ -763,6 +803,14 @@ export const defaultSchedulerSettings: SchedulerSettings = {
     notificationsEnabled: true,
 };
 
+export const defaultClassificationLabelSettings: ClassificationLabelSettings = {
+    importantLabelName: 'Mairu/Important',
+    newsletterLabelName: 'Mairu/Newsletter',
+    archiveLabelName: 'Mairu/Archive',
+    unreadPriorityLabelName: 'Mairu/Unread Priority',
+    needsReviewLabelName: 'Mairu/Needs Review',
+};
+
 const schedulerNotificationEventName = 'scheduler:notification';
 const schedulerNotificationListeners = new Set<(notification: SchedulerNotification) => void>();
 let schedulerNotificationSubscribed = false;
@@ -839,6 +887,52 @@ export async function updateSchedulerSettings(
 
     if (!result) {
         throw new Error('自動実行設定更新 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        success: raw.Success,
+        message: raw.Message,
+    };
+}
+
+export async function loadClassificationLabelSettings(): Promise<ClassificationLabelSettings> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.GetClassificationLabelSettings?.();
+    const raw = result ? await result : null;
+
+    if (!raw) {
+        return defaultClassificationLabelSettings;
+    }
+
+    return {
+        importantLabelName:
+            raw.ImportantLabelName ?? defaultClassificationLabelSettings.importantLabelName,
+        newsletterLabelName:
+            raw.NewsletterLabelName ?? defaultClassificationLabelSettings.newsletterLabelName,
+        archiveLabelName:
+            raw.ArchiveLabelName ?? defaultClassificationLabelSettings.archiveLabelName,
+        unreadPriorityLabelName:
+            raw.UnreadPriorityLabelName ?? defaultClassificationLabelSettings.unreadPriorityLabelName,
+        needsReviewLabelName:
+            raw.NeedsReviewLabelName ?? defaultClassificationLabelSettings.needsReviewLabelName,
+    };
+}
+
+export async function updateClassificationLabelSettings(
+    request: UpdateClassificationLabelSettingsRequest,
+): Promise<OperationResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.UpdateClassificationLabelSettings?.({
+        ImportantLabelName: request.importantLabelName,
+        NewsletterLabelName: request.newsletterLabelName,
+        ArchiveLabelName: request.archiveLabelName,
+        UnreadPriorityLabelName: request.unreadPriorityLabelName,
+        NeedsReviewLabelName: request.needsReviewLabelName,
+    });
+
+    if (!result) {
+        throw new Error('分類ラベル設定更新 API がまだ公開されていません。');
     }
 
     const raw = await result;

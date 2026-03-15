@@ -7,14 +7,18 @@ import {
     checkGmailConnection,
     clearClaudeAPIKey,
     cancelGoogleLogin,
+    defaultClassificationLabelSettings,
     defaultSchedulerSettings,
     getNotificationPermissionStatus,
+    loadClassificationLabelSettings,
     loadSchedulerSettings,
     previewGWSGmailDryRun,
     requestNotificationPermission,
     saveClaudeAPIKey,
     startGoogleLogin,
+    updateClassificationLabelSettings,
     updateSchedulerSettings,
+    type ClassificationLabelSettings,
     type GWSDiagnosticsResult,
     type GWSGmailDryRunResult,
     type GmailConnectionResult,
@@ -116,6 +120,12 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [schedulerError, setSchedulerError] = useState<string | null>(null);
     const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
     const [schedulerLoaded, setSchedulerLoaded] = useState(false);
+    const [classificationLabelSettings, setClassificationLabelSettings] =
+        useState<ClassificationLabelSettings>(defaultClassificationLabelSettings);
+    const [classificationLabelLoaded, setClassificationLabelLoaded] = useState(false);
+    const [classificationLabelPending, setClassificationLabelPending] = useState(false);
+    const [classificationLabelError, setClassificationLabelError] = useState<string | null>(null);
+    const [classificationLabelMessage, setClassificationLabelMessage] = useState<string | null>(null);
     const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
         getNotificationPermissionStatus(),
     );
@@ -137,6 +147,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
 
         async function loadSchedulerStatus() {
             setSchedulerLoaded(false);
+            setClassificationLabelLoaded(false);
 
             try {
                 const settings = await loadSchedulerSettings();
@@ -156,6 +167,26 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                         : '自動実行設定の読み込みに失敗しました。';
                 setSchedulerError(message);
                 setSchedulerLoaded(false);
+            }
+
+            try {
+                const settings = await loadClassificationLabelSettings();
+                if (cancelled) {
+                    return;
+                }
+                setClassificationLabelSettings(settings);
+                setClassificationLabelLoaded(true);
+                setClassificationLabelError(null);
+            } catch (cause) {
+                if (cancelled) {
+                    return;
+                }
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '分類ラベル設定の読み込みに失敗しました。';
+                setClassificationLabelError(message);
+                setClassificationLabelLoaded(false);
             }
 
             try {
@@ -423,6 +454,54 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
             setSchedulerError(message);
         } finally {
             setSchedulerPending(false);
+        }
+    }
+
+    function updateClassificationLabelField(
+        key: keyof ClassificationLabelSettings,
+        value: string,
+    ) {
+        setClassificationLabelSettings((previous) => ({
+            ...previous,
+            [key]: value,
+        }));
+        setClassificationLabelMessage(null);
+    }
+
+    async function handleSaveClassificationLabelSettings() {
+        setClassificationLabelPending(true);
+        setClassificationLabelError(null);
+        setClassificationLabelMessage(null);
+
+        try {
+            const result = await updateClassificationLabelSettings(classificationLabelSettings);
+            if (!result.success) {
+                setClassificationLabelError(result.message);
+                return;
+            }
+
+            setClassificationLabelMessage(result.message);
+            try {
+                const latest = await loadClassificationLabelSettings();
+                setClassificationLabelSettings(latest);
+                setClassificationLabelLoaded(true);
+            } catch (cause) {
+                const reloadMessage =
+                    cause instanceof Error
+                        ? cause.message
+                        : '分類ラベル設定の再読み込みに失敗しました。';
+                setClassificationLabelError(
+                    `保存は完了しましたが、最新設定の再取得に失敗しました: ${reloadMessage}`,
+                );
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : '分類ラベル設定の保存に失敗しました。';
+            setClassificationLabelError(message);
+        } finally {
+            setClassificationLabelPending(false);
         }
     }
 
@@ -924,6 +1003,124 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 </div>
                                 {schedulerMessage ? <p className="settings-inline-note">{schedulerMessage}</p> : null}
                                 {schedulerError ? <p className="settings-error-note">{schedulerError}</p> : null}
+                            </div>
+                        </li>
+                        <li className="rounded-[24px] border border-slate-400/15 bg-slate-900/35 p-6 shadow-[0_20px_45px_-30px_rgba(14,165,233,0.55)] backdrop-blur">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <h3 className="text-lg font-semibold text-slate-50">自動分別ラベル名</h3>
+                                <span
+                                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide ${
+                                        classificationLabelLoaded
+                                            ? 'border-emerald-300/35 bg-emerald-500/10 text-emerald-200'
+                                            : 'border-slate-400/35 bg-slate-600/20 text-slate-200'
+                                    }`}
+                                >
+                                    {classificationLabelLoaded ? '読込済み' : '未読込'}
+                                </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-7 text-slate-300">
+                                分類カテゴリごとに Gmail ラベル名を任意指定できます。空欄で保存すると既定値を利用します。
+                            </p>
+                            <div className="mt-4 grid gap-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <label className="grid gap-2" htmlFor="label-important">
+                                        <span className="text-sm font-semibold text-slate-300">重要（important）</span>
+                                        <input
+                                            id="label-important"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="text"
+                                            value={classificationLabelSettings.importantLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('importantLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="grid gap-2" htmlFor="label-newsletter">
+                                        <span className="text-sm font-semibold text-slate-300">ニュースレター（newsletter）</span>
+                                        <input
+                                            id="label-newsletter"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="text"
+                                            value={classificationLabelSettings.newsletterLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('newsletterLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="grid gap-2" htmlFor="label-archive">
+                                        <span className="text-sm font-semibold text-slate-300">アーカイブ（archive）</span>
+                                        <input
+                                            id="label-archive"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="text"
+                                            value={classificationLabelSettings.archiveLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('archiveLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="grid gap-2" htmlFor="label-unread-priority">
+                                        <span className="text-sm font-semibold text-slate-300">未読優先（unread_priority）</span>
+                                        <input
+                                            id="label-unread-priority"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="text"
+                                            value={classificationLabelSettings.unreadPriorityLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('unreadPriorityLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="grid gap-2" htmlFor="label-needs-review">
+                                        <span className="text-sm font-semibold text-slate-300">要確認（needs_review）</span>
+                                        <input
+                                            id="label-needs-review"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="text"
+                                            value={classificationLabelSettings.needsReviewLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('needsReviewLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <button
+                                        className="inline-flex items-center justify-center rounded-[14px] bg-sky-500/90 px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_18px_-12px_rgba(14,165,233,0.9)] transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleSaveClassificationLabelSettings();
+                                        }}
+                                        disabled={classificationLabelPending || !classificationLabelLoaded}
+                                    >
+                                        {classificationLabelPending ? '保存中...' : '分類ラベル設定を保存'}
+                                    </button>
+                                </div>
+                                {classificationLabelMessage ? (
+                                    <p
+                                        className="text-sm leading-7 text-sky-100"
+                                        role="status"
+                                        aria-live="polite"
+                                        aria-atomic="true"
+                                    >
+                                        {classificationLabelMessage}
+                                    </p>
+                                ) : null}
+                                {classificationLabelError ? (
+                                    <p
+                                        className="text-sm leading-7 text-rose-300"
+                                        role="alert"
+                                        aria-live="assertive"
+                                        aria-atomic="true"
+                                    >
+                                        {classificationLabelError}
+                                    </p>
+                                ) : null}
                             </div>
                         </li>
                     </ul>
