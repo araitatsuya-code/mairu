@@ -125,6 +125,56 @@ type ClassificationResponse struct {
 	Results []ClassificationResult
 }
 
+// FetchClassificationMessagesRequest は Classify 画面向け Gmail 取得条件を表す。
+type FetchClassificationMessagesRequest struct {
+	Query      string
+	MaxResults int
+	LabelIDs   []string
+	PageToken  string
+}
+
+// FetchClassificationMessagesResult は Classify 画面向け Gmail 取得結果を表す。
+type FetchClassificationMessagesResult struct {
+	Messages       []EmailSummary
+	NextPageToken  string
+	TokenRefreshed bool
+}
+
+// GmailLabel は Gmail ラベルの最小情報を表す。
+type GmailLabel struct {
+	ID   string
+	Name string
+	Type string
+}
+
+// ListGmailLabelsResult は Gmail ラベル一覧取得結果を表す。
+type ListGmailLabelsResult struct {
+	Labels         []GmailLabel
+	TokenRefreshed bool
+}
+
+// GmailMessageHeader はメールヘッダ 1 件を表す。
+type GmailMessageHeader struct {
+	Name  string
+	Value string
+}
+
+// GmailMessageDetail は 1 通分の詳細情報を表す。
+type GmailMessageDetail struct {
+	ID       string
+	ThreadID string
+	From     string
+	To       string
+	Subject  string
+	Date     string
+	Snippet  string
+	LabelIDs []string
+	Unread   bool
+	BodyText string
+	BodyHTML string
+	Headers  []GmailMessageHeader
+}
+
 // BlocklistKind はブロックリストの登録単位を表す。
 type BlocklistKind string
 

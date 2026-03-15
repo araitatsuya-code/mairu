@@ -564,6 +564,120 @@ func (a *App) PreviewGWSGmailDryRun(request types.GWSGmailDryRunRequest) types.G
 	}
 }
 
+// FetchClassificationMessages は Classify 画面向けに Gmail 実メールを取得する。
+func (a *App) FetchClassificationMessages(
+	request types.FetchClassificationMessagesRequest,
+) (types.FetchClassificationMessagesResult, error) {
+	if a.gmailClient == nil {
+		return types.FetchClassificationMessagesResult{}, fmt.Errorf("Gmail クライアントが初期化されていません")
+	}
+
+	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
+	defer cancel()
+
+	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	if err != nil {
+		return types.FetchClassificationMessagesResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
+	if err != nil {
+		return types.FetchClassificationMessagesResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
+			return types.FetchClassificationMessagesResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	maxResults := request.MaxResults
+	if maxResults <= 0 || maxResults > types.ClassificationMaxBatchSize {
+		maxResults = types.ClassificationMaxBatchSize
+	}
+
+	result, err := a.gmailClient.FetchMessages(baseContext, token.AccessToken, gmail.FetchRequest{
+		MaxResults: maxResults,
+		LabelIDs:   normalizeLabelIDs(request.LabelIDs),
+		Query:      strings.TrimSpace(request.Query),
+		PageToken:  strings.TrimSpace(request.PageToken),
+	})
+	if err != nil {
+		return types.FetchClassificationMessagesResult{}, fmt.Errorf("Gmail メール取得に失敗しました: %w", err)
+	}
+
+	return types.FetchClassificationMessagesResult{
+		Messages:       result.Messages,
+		NextPageToken:  strings.TrimSpace(result.NextPageToken),
+		TokenRefreshed: refreshed,
+	}, nil
+}
+
+// ListGmailLabels は Classify 画面向けに Gmail ラベル一覧を返す。
+func (a *App) ListGmailLabels() (types.ListGmailLabelsResult, error) {
+	if a.gmailClient == nil {
+		return types.ListGmailLabelsResult{}, fmt.Errorf("Gmail クライアントが初期化されていません")
+	}
+
+	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
+	defer cancel()
+
+	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	if err != nil {
+		return types.ListGmailLabelsResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
+	if err != nil {
+		return types.ListGmailLabelsResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
+			return types.ListGmailLabelsResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	labels, err := a.gmailClient.ListLabels(baseContext, token.AccessToken)
+	if err != nil {
+		return types.ListGmailLabelsResult{}, fmt.Errorf("Gmail ラベル一覧取得に失敗しました: %w", err)
+	}
+
+	return types.ListGmailLabelsResult{
+		Labels:         labels,
+		TokenRefreshed: refreshed,
+	}, nil
+}
+
+// FetchGmailMessageDetail は Classify 画面向けに Gmail メール詳細を返す。
+func (a *App) FetchGmailMessageDetail(messageID string) (types.GmailMessageDetail, error) {
+	if a.gmailClient == nil {
+		return types.GmailMessageDetail{}, fmt.Errorf("Gmail クライアントが初期化されていません")
+	}
+
+	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
+	defer cancel()
+
+	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	if err != nil {
+		return types.GmailMessageDetail{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
+	if err != nil {
+		return types.GmailMessageDetail{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
+			return types.GmailMessageDetail{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	detail, err := a.gmailClient.FetchMessageDetail(baseContext, token.AccessToken, messageID)
+	if err != nil {
+		return types.GmailMessageDetail{}, fmt.Errorf("Gmail メール詳細取得に失敗しました: %w", err)
+	}
+	return detail, nil
+}
+
 // ExecuteGmailActions は承認済み分類結果を Gmail 側へ反映する。
 func (a *App) ExecuteGmailActions(
 	request types.ExecuteGmailActionsRequest,
@@ -2891,6 +3005,25 @@ func normalizeDomain(raw string) string {
 		return ""
 	}
 	return trimmed
+}
+
+func normalizeLabelIDs(labelIDs []string) []string {
+	normalized := make([]string, 0, len(labelIDs))
+	seen := make(map[string]struct{}, len(labelIDs))
+
+	for _, labelID := range labelIDs {
+		trimmed := strings.TrimSpace(labelID)
+		if trimmed == "" {
+			continue
+		}
+		if _, found := seen[trimmed]; found {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+
+	return normalized
 }
 
 func (a *App) initialAuthStatus() string {

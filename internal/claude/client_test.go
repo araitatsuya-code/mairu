@@ -197,6 +197,90 @@ func TestClassifyRejectsMissingResult(t *testing.T) {
 	}
 }
 
+func TestClassifyParsesJSONEmbeddedInText(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL:      "https://claude.test",
+		DefaultModel: "claude-test-model",
+		HTTPClient: &http.Client{
+			Transport: claudeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+							"content":[
+								{
+									"type":"text",
+									"text":"以下が分類結果です。\n結果: [{\"id\":\"msg-1\",\"category\":\"important\",\"confidence\":0.91,\"reason\":\"要返信\"}]\n確認してください。"
+								}
+							]
+						}`)),
+				}, nil
+			}),
+		},
+	})
+
+	result, err := client.Classify(context.Background(), "claude-secret", types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{ID: "msg-1", Subject: "subject"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Classify returned error: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].MessageID != "msg-1" {
+		t.Fatalf("MessageID = %q, want %q", result.Results[0].MessageID, "msg-1")
+	}
+}
+
+func TestClassifySkipsMismatchedCandidateAndUsesLaterValidCandidate(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL:      "https://claude.test",
+		DefaultModel: "claude-test-model",
+		HTTPClient: &http.Client{
+			Transport: claudeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"content":[
+							{
+								"type":"text",
+								"text":"補助情報: []\n最終結果: [{\"id\":\"msg-1\",\"category\":\"important\",\"confidence\":0.91,\"reason\":\"要返信\"}]"
+							}
+						]
+					}`)),
+				}, nil
+			}),
+		},
+	})
+
+	result, err := client.Classify(context.Background(), "claude-secret", types.ClassificationRequest{
+		Messages: []types.EmailSummary{
+			{ID: "msg-1", Subject: "subject"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Classify returned error: %v", err)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("Results length = %d, want 1", len(result.Results))
+	}
+	if result.Results[0].MessageID != "msg-1" {
+		t.Fatalf("MessageID = %q, want %q", result.Results[0].MessageID, "msg-1")
+	}
+}
+
 type claudeRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn claudeRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
