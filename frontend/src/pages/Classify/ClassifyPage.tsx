@@ -648,14 +648,22 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                 return;
             }
 
+            const includesSampleMessages =
+                messages.some((message) => message.id.startsWith('sample-')) ||
+                response.results.some((result) => result.messageID.startsWith('sample-'));
+
             setResults(response.results);
-            setClassificationDataMode('live');
+            setClassificationDataMode(includesSampleMessages ? 'sample' : 'live');
             setLastClassifiedAt(new Date().toISOString());
             setActionError(null);
             setLastActionResult(null);
             resetApprovalSelection();
             resetCorrections();
-            await persistClassificationLogs(messages, response.results);
+            if (includesSampleMessages) {
+                setLoggingMessage('サンプル結果のため分類ログ保存はスキップしました。');
+            } else {
+                await persistClassificationLogs(messages, response.results);
+            }
         } catch (cause) {
             setError(extractErrorMessage(cause, 'Claude 分類に失敗しました。'));
         } finally {
