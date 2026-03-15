@@ -122,6 +122,14 @@ var migrations = []migration{
 				ON classification_logs(category, classified_at DESC)`,
 		},
 	},
+	{
+		version: 4,
+		name:    "add action log lookup index",
+		statements: []string{
+			`CREATE INDEX IF NOT EXISTS idx_action_logs_message_action
+				ON action_logs(message_id, action_kind, id DESC)`,
+		},
+	},
 }
 
 // Open は SQLite を初期化し、必要なマイグレーションを適用した Store を返す。
@@ -759,6 +767,60 @@ func (s *Store) ListActionLogEntries(ctx context.Context) ([]types.ActionLogEntr
 	}
 
 	return items, nil
+}
+
+// GetLatestActionLogEntry は message_id + action_kind の最新ログを返す。
+func (s *Store) GetLatestActionLogEntry(
+	ctx context.Context,
+	messageID string,
+	actionKind types.ActionKind,
+) (types.ActionLogEntry, bool, error) {
+	if err := s.ensureReady(); err != nil {
+		return types.ActionLogEntry{}, false, err
+	}
+
+	normalizedMessageID := strings.TrimSpace(messageID)
+	if normalizedMessageID == "" {
+		return types.ActionLogEntry{}, false, errors.New("message_id は必須です")
+	}
+	normalizedActionKind := strings.TrimSpace(string(actionKind))
+	if normalizedActionKind == "" {
+		return types.ActionLogEntry{}, false, errors.New("action_kind は必須です")
+	}
+
+	var item types.ActionLogEntry
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, message_id, thread_id, sender, subject, action_kind, status, detail,
+			category, confidence, review_level, source, created_at
+		FROM action_logs
+		WHERE message_id = ? AND action_kind = ?
+		ORDER BY id DESC
+		LIMIT 1`,
+		normalizedMessageID,
+		normalizedActionKind,
+	).Scan(
+		&item.ID,
+		&item.MessageID,
+		&item.ThreadID,
+		&item.From,
+		&item.Subject,
+		&item.ActionKind,
+		&item.Status,
+		&item.Detail,
+		&item.Category,
+		&item.Confidence,
+		&item.ReviewLevel,
+		&item.Source,
+		&item.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return types.ActionLogEntry{}, false, nil
+	}
+	if err != nil {
+		return types.ActionLogEntry{}, false, fmt.Errorf("処理ログを取得できませんでした: %w", err)
+	}
+	return item, true, nil
 }
 
 // ListBlocklistSuggestions は修正履歴からブロック候補を返す。

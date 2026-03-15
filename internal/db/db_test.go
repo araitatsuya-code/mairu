@@ -472,4 +472,26 @@ func TestClassificationAndActionLogs(t *testing.T) {
 	if actionLogs[0].MessageID == "" || actionLogs[0].CreatedAt == "" {
 		t.Fatalf("stored action log is missing required fields: %+v", actionLogs[0])
 	}
+
+	latest, ok, err := store.GetLatestActionLogEntry(ctx, "m-2", types.ActionKindDelete)
+	if err != nil {
+		t.Fatalf("GetLatestActionLogEntry returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("GetLatestActionLogEntry ok = false, want true")
+	}
+	if latest.Status != "failed" {
+		t.Fatalf("latest.Status = %q, want %q", latest.Status, "failed")
+	}
+	if latest.Detail != "quota error" {
+		t.Fatalf("latest.Detail = %q, want %q", latest.Detail, "quota error")
+	}
+
+	_, ok, err = store.GetLatestActionLogEntry(ctx, "missing", types.ActionKindDelete)
+	if err != nil {
+		t.Fatalf("GetLatestActionLogEntry(missing) returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("GetLatestActionLogEntry(missing) ok = true, want false")
+	}
 }

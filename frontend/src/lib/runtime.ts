@@ -115,6 +115,7 @@ export type ExecuteGmailActionsResult = {
     processedCount: number;
     successCount: number;
     failureCount: number;
+    skippedCount: number;
     deletedCount: number;
     archivedCount: number;
     markedReadCount: number;
@@ -362,6 +363,7 @@ type WailsAppApi = {
               ProcessedCount?: number;
               SuccessCount?: number;
               FailureCount?: number;
+              SkippedCount?: number;
               DeletedCount?: number;
               ArchivedCount?: number;
               MarkedReadCount?: number;
@@ -380,6 +382,7 @@ type WailsAppApi = {
               ProcessedCount?: number;
               SuccessCount?: number;
               FailureCount?: number;
+              SkippedCount?: number;
               DeletedCount?: number;
               ArchivedCount?: number;
               MarkedReadCount?: number;
@@ -785,6 +788,7 @@ export async function executeGmailActions(
         processedCount: raw.ProcessedCount ?? 0,
         successCount: raw.SuccessCount ?? 0,
         failureCount: raw.FailureCount ?? 0,
+        skippedCount: raw.SkippedCount ?? 0,
         deletedCount: raw.DeletedCount ?? 0,
         archivedCount: raw.ArchivedCount ?? 0,
         markedReadCount: raw.MarkedReadCount ?? 0,

@@ -267,6 +267,7 @@ type ExecuteGmailActionsResult struct {
 	ProcessedCount  int
 	SuccessCount    int
 	FailureCount    int
+	SkippedCount    int
 	DeletedCount    int
 	ArchivedCount   int
 	MarkedReadCount int

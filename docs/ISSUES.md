@@ -45,6 +45,7 @@
 | MAIRU-020 | #40 | ready | Phase 4 | 50 件バッチ checkpoint 保存と再開 | MAIRU-010, MAIRU-013, MAIRU-018 |
 | MAIRU-021 | #41 | ready | Phase 4 | `action_logs` ベースの Gmail アクション重複防止 | MAIRU-009, MAIRU-010, MAIRU-018 |
 | MAIRU-022 | #42 | blocked | Phase 4 | 手動 backlog 実行の件数上限と再開導線 | MAIRU-019, MAIRU-020, MAIRU-021 |
+| MAIRU-023 | #46 | backlog | v2+ | Google Workspace CLI (`gws`) 統合基盤の PoC | MAIRU-017 |
 
 ## Issue 詳細
 
@@ -374,6 +375,25 @@
   - backlog を 500 件単位で安全に手動実行できる
   - 再開可能な場合に UI から続行操作ができる
   - 段階消化の運用手順がドキュメントで説明できる
+
+### MAIRU-023: Google Workspace CLI (`gws`) 統合基盤の PoC
+- 状態: `backlog`
+- フェーズ: v2+
+- GitHub: `#46`
+- 依存: `MAIRU-017`
+- 目的: `gws` を使った Workspace 連携の実験基盤を整え、AI アシスタント機能での採用可否を判断できる状態にする。
+- 対応内容:
+  - `gws` をオプショナル依存として扱う方針を定義する（未導入時フォールバック含む）
+  - Go 側に `internal/gws` 実行ラッパーを追加し、`--version` / read-only コマンドを安全実行できるようにする
+  - `--dry-run` 前提で Gmail 操作候補を取得する PoC を実装する（本実行はまだ行わない）
+  - CLI 実行失敗時のエラー分類（認証不備 / コマンド不正 / タイムアウト）を UI に返せる DTO を定義する
+  - 設定画面に `gws` 利用可否と診断結果を表示する最小導線を追加する
+  - `docs/` に導入手順と制約（`gws` は 0.x で破壊的変更あり、非公式サポート）を追記する
+- 完了条件:
+  - `gws` がある環境で read-only コマンドが Mairu から実行できる
+  - `gws` がない環境でも既存 Gmail 機能が回帰しない
+  - 破壊的操作が `--dry-run` + 確認 UI を通らない限り実行されない
+  - PoC の検証結果をもとに「本採用 / 見送り」の判断材料が残る
 
 ## GitHub Issue 化するときの手順
 1. このファイルから対象 issue を選ぶ。
