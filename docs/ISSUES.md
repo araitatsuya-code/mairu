@@ -45,7 +45,7 @@
 | MAIRU-020 | #40 | ready | Phase 4 | 50 件バッチ checkpoint 保存と再開 | MAIRU-010, MAIRU-013, MAIRU-018 |
 | MAIRU-021 | #41 | ready | Phase 4 | `action_logs` ベースの Gmail アクション重複防止 | MAIRU-009, MAIRU-010, MAIRU-018 |
 | MAIRU-022 | #42 | blocked | Phase 4 | 手動 backlog 実行の件数上限と再開導線 | MAIRU-019, MAIRU-020, MAIRU-021 |
-| MAIRU-023 | #46 | backlog | v2+ | Google Workspace CLI (`gws`) 統合基盤の PoC | MAIRU-017 |
+| MAIRU-023 | #46 | in progress | v2+ | Google Workspace CLI (`gws`) 統合基盤の PoC | MAIRU-017 |
 
 ## Issue 詳細
 
@@ -377,7 +377,7 @@
   - 段階消化の運用手順がドキュメントで説明できる
 
 ### MAIRU-023: Google Workspace CLI (`gws`) 統合基盤の PoC
-- 状態: `backlog`
+- 状態: `in progress`
 - フェーズ: v2+
 - GitHub: `#46`
 - 依存: `MAIRU-017`

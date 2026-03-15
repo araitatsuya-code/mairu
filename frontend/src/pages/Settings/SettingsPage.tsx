@@ -3,16 +3,20 @@ import './SettingsPage.css';
 import { useEffect, useState } from 'react';
 
 import {
+    checkGWSDiagnostics,
     checkGmailConnection,
     clearClaudeAPIKey,
     cancelGoogleLogin,
     defaultSchedulerSettings,
     getNotificationPermissionStatus,
     loadSchedulerSettings,
+    previewGWSGmailDryRun,
     requestNotificationPermission,
     saveClaudeAPIKey,
     startGoogleLogin,
     updateSchedulerSettings,
+    type GWSDiagnosticsResult,
+    type GWSGmailDryRunResult,
     type GmailConnectionResult,
     type GoogleLoginResult,
     type RuntimeStatus,
@@ -72,6 +76,23 @@ function formatNotificationPermission(permission: NotificationPermission | 'unsu
     }
 }
 
+function formatGWSErrorKind(kind: string): string {
+    switch (kind) {
+        case 'none':
+            return 'なし';
+        case 'not_installed':
+            return '未導入';
+        case 'auth':
+            return '認証不備';
+        case 'invalid_command':
+            return 'コマンド不正';
+        case 'timeout':
+            return 'タイムアウト';
+        default:
+            return '実行失敗';
+    }
+}
+
 export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageProps) {
     const [loginPending, setLoginPending] = useState(false);
     const [loginError, setLoginError] = useState<string | null>(null);
@@ -80,6 +101,13 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [gmailPending, setGmailPending] = useState(false);
     const [gmailError, setGmailError] = useState<string | null>(null);
     const [lastGmailResult, setLastGmailResult] = useState<GmailConnectionResult | null>(null);
+    const [gwsDiagnosticPending, setGWSDiagnosticPending] = useState(false);
+    const [gwsDryRunPending, setGWSDryRunPending] = useState(false);
+    const [gwsError, setGWSError] = useState<string | null>(null);
+    const [gwsDiagnosticResult, setGWSDiagnosticResult] = useState<GWSDiagnosticsResult | null>(null);
+    const [gwsDryRunResult, setGWSDryRunResult] = useState<GWSGmailDryRunResult | null>(null);
+    const [gwsQuery, setGWSQuery] = useState('label:inbox is:unread newer_than:7d');
+    const [gwsMaxResults, setGWSMaxResults] = useState(20);
     const [claudeApiKey, setClaudeApiKey] = useState('');
     const [claudePending, setClaudePending] = useState(false);
     const [claudeError, setClaudeError] = useState<string | null>(null);
@@ -305,6 +333,61 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
         }
     }
 
+    async function handleCheckGWSDiagnostics() {
+        setGWSDiagnosticPending(true);
+        setGWSError(null);
+
+        try {
+            const result = await checkGWSDiagnostics();
+            setGWSDiagnosticResult(result);
+            if (!result.success) {
+                setGWSError(result.message);
+            }
+
+            try {
+                await onStatusRefresh();
+            } catch (cause) {
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '状態の再取得に失敗しました。';
+                setGWSError((previous) => (previous ? `${previous} / ${message}` : message));
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'gws 診断に失敗しました。';
+            setGWSError(message);
+        } finally {
+            setGWSDiagnosticPending(false);
+        }
+    }
+
+    async function handlePreviewGWSDryRun() {
+        setGWSDryRunPending(true);
+        setGWSError(null);
+
+        try {
+            const result = await previewGWSGmailDryRun({
+                query: gwsQuery.trim(),
+                maxResults: Math.max(1, gwsMaxResults),
+            });
+            setGWSDryRunResult(result);
+            if (!result.success) {
+                setGWSError(result.message);
+            }
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : 'gws Gmail dry-run に失敗しました。';
+            setGWSError(message);
+        } finally {
+            setGWSDryRunPending(false);
+        }
+    }
+
     function updateSchedulerInterval(
         key: 'classificationIntervalMinutes' | 'blocklistIntervalMinutes' | 'knownBlockIntervalMinutes',
         value: string,
@@ -397,6 +480,12 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                     readyLabel="利用可能"
                     pendingLabel="未初期化"
                     ready={status.databaseReady}
+                />
+                <StatusCard
+                    label="gws CLI"
+                    readyLabel="利用可能"
+                    pendingLabel="未導入"
+                    ready={status.gwsAvailable}
                 />
             </section>
 
@@ -546,6 +635,126 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 {gmailError ? (
                                     <p className="text-sm leading-7 text-rose-300">{gmailError}</p>
                                 ) : null}
+                            </div>
+                        </li>
+                        <li className="settings-item">
+                            <div className="settings-item-header">
+                                <h3 className="settings-item-title">Google Workspace CLI (`gws`) PoC</h3>
+                                <span className={`state-chip ${status.gwsAvailable ? 'ready' : 'pending'}`}>
+                                    {status.gwsAvailable ? '利用可能' : '未導入'}
+                                </span>
+                            </div>
+                            <p className="settings-item-body">
+                                `gws` は任意導入です。ここでは `--version` 診断と `gmail users messages list --dry-run`
+                                を実行し、既存 Gmail 実装を壊さない PoC 導線を確認できます。
+                            </p>
+                            <div className="settings-action-stack">
+                                <p className="settings-inline-note">{status.gwsStatus}</p>
+                                <div className="settings-action-row">
+                                    <button
+                                        className="settings-action-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleCheckGWSDiagnostics();
+                                        }}
+                                        disabled={gwsDiagnosticPending}
+                                    >
+                                        {gwsDiagnosticPending ? '診断中...' : 'gws 診断を実行'}
+                                    </button>
+                                    <button
+                                        className="settings-cancel-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handlePreviewGWSDryRun();
+                                        }}
+                                        disabled={gwsDryRunPending}
+                                    >
+                                        {gwsDryRunPending ? 'dry-run 実行中...' : 'Gmail dry-run 候補を取得'}
+                                    </button>
+                                </div>
+                                <div className="settings-scheduler-grid">
+                                    <label className="settings-field" htmlFor="gws-query">
+                                        <span className="settings-field-label">Gmail クエリ</span>
+                                        <input
+                                            id="gws-query"
+                                            className="settings-input"
+                                            type="text"
+                                            value={gwsQuery}
+                                            onChange={(event) => {
+                                                setGWSQuery(event.target.value);
+                                            }}
+                                            disabled={gwsDryRunPending}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="gws-max-results">
+                                        <span className="settings-field-label">最大件数</span>
+                                        <input
+                                            id="gws-max-results"
+                                            className="settings-input"
+                                            type="number"
+                                            min={1}
+                                            max={100}
+                                            step={1}
+                                            value={gwsMaxResults}
+                                            onChange={(event) => {
+                                                const parsed = Number.parseInt(event.target.value, 10);
+                                                setGWSMaxResults(Number.isFinite(parsed) ? Math.max(1, parsed) : 1);
+                                            }}
+                                            disabled={gwsDryRunPending}
+                                        />
+                                    </label>
+                                </div>
+                                {gwsDiagnosticResult ? (
+                                    <dl className="settings-result-grid">
+                                        <div>
+                                            <dt>診断結果</dt>
+                                            <dd>{gwsDiagnosticResult.message}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>エラー分類</dt>
+                                            <dd>{formatGWSErrorKind(gwsDiagnosticResult.errorKind)}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>バイナリ</dt>
+                                            <dd>{gwsDiagnosticResult.binaryPath || '未検出'}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>バージョン</dt>
+                                            <dd>{gwsDiagnosticResult.version || '未取得'}</dd>
+                                        </div>
+                                        {gwsDiagnosticResult.command ? (
+                                            <div>
+                                                <dt>実行コマンド</dt>
+                                                <dd className="break-all">{gwsDiagnosticResult.command}</dd>
+                                            </div>
+                                        ) : null}
+                                    </dl>
+                                ) : null}
+                                {gwsDryRunResult ? (
+                                    <dl className="settings-result-grid">
+                                        <div>
+                                            <dt>dry-run 結果</dt>
+                                            <dd>{gwsDryRunResult.message}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>エラー分類</dt>
+                                            <dd>{formatGWSErrorKind(gwsDryRunResult.errorKind)}</dd>
+                                        </div>
+                                        {gwsDryRunResult.command ? (
+                                            <div>
+                                                <dt>実行コマンド</dt>
+                                                <dd className="break-all">{gwsDryRunResult.command}</dd>
+                                            </div>
+                                        ) : null}
+                                        <div>
+                                            <dt>コマンド出力</dt>
+                                            <dd className="max-h-56 overflow-auto whitespace-pre-wrap rounded-[14px] border border-slate-400/10 bg-slate-950/45 px-3 py-2 text-xs text-slate-200">
+                                                {gwsDryRunResult.output || '出力なし'}
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                ) : null}
+                                {gwsError ? <p className="settings-error-note">{gwsError}</p> : null}
                             </div>
                         </li>
                         <li className="settings-item">

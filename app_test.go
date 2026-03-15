@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"mairu/internal/claude"
 	"mairu/internal/db"
 	"mairu/internal/gmail"
+	"mairu/internal/gws"
 	"mairu/internal/scheduler"
 	"mairu/internal/types"
 )
@@ -76,6 +78,80 @@ func TestGetRuntimeStatusFallsBackToAccessTokenPreview(t *testing.T) {
 
 	if status.GoogleTokenPreview != "acce****oken" {
 		t.Fatalf("GoogleTokenPreview = %q, want %q", status.GoogleTokenPreview, "acce****oken")
+	}
+}
+
+func TestGetRuntimeStatusIncludesGWSAvailability(t *testing.T) {
+	t.Parallel()
+
+	binaryPath := writeTestExecutableScript(t, `#!/bin/sh
+echo "gws 0.9.0"
+`)
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{ClientID: "client-id", ClientSecret: "client-secret"}),
+		secretManager: auth.NewSecretManager(auth.NewMemorySecretStore()),
+		gwsClient:     gws.NewClient(gws.Options{BinaryPath: binaryPath}),
+	}
+
+	status := app.GetRuntimeStatus()
+	if !status.GWSAvailable {
+		t.Fatalf("GWSAvailable = false, want true")
+	}
+	if !strings.Contains(status.GWSStatus, binaryPath) {
+		t.Fatalf("GWSStatus = %q, want path included", status.GWSStatus)
+	}
+}
+
+func TestCheckGWSDiagnosticsReturnsResult(t *testing.T) {
+	t.Parallel()
+
+	binaryPath := writeTestExecutableScript(t, `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "gws 0.9.0"
+  exit 0
+fi
+echo "unexpected" >&2
+exit 3
+`)
+
+	app := &App{
+		gwsClient: gws.NewClient(gws.Options{BinaryPath: binaryPath}),
+	}
+
+	result := app.CheckGWSDiagnostics()
+	if !result.Success {
+		t.Fatalf("Success = false, want true (message=%q output=%q)", result.Message, result.Output)
+	}
+	if result.ErrorKind != types.GWSCLIErrorKindNone {
+		t.Fatalf("ErrorKind = %q, want %q", result.ErrorKind, types.GWSCLIErrorKindNone)
+	}
+	if result.Version != "gws 0.9.0" {
+		t.Fatalf("Version = %q, want %q", result.Version, "gws 0.9.0")
+	}
+}
+
+func TestPreviewGWSGmailDryRunMapsInvalidCommand(t *testing.T) {
+	t.Parallel()
+
+	binaryPath := writeTestExecutableScript(t, `#!/bin/sh
+echo "invalid command" >&2
+exit 3
+`)
+
+	app := &App{
+		gwsClient: gws.NewClient(gws.Options{BinaryPath: binaryPath}),
+	}
+
+	result := app.PreviewGWSGmailDryRun(types.GWSGmailDryRunRequest{
+		Query:      "label:inbox",
+		MaxResults: 10,
+	})
+	if result.Success {
+		t.Fatalf("Success = true, want false")
+	}
+	if result.ErrorKind != types.GWSCLIErrorKindInvalidCommand {
+		t.Fatalf("ErrorKind = %q, want %q", result.ErrorKind, types.GWSCLIErrorKindInvalidCommand)
 	}
 }
 
@@ -2531,6 +2607,16 @@ func TestStartSchedulerSkipsUnimplementedJobs(t *testing.T) {
 	if !app.schedulerSvc.Trigger(schedulerJobBlocklist) {
 		t.Fatalf("Trigger(blocklist) = false, want true")
 	}
+}
+
+func writeTestExecutableScript(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "gws-test.sh")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+	return path
 }
 
 type appRoundTripFunc func(*http.Request) (*http.Response, error)

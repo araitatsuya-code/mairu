@@ -345,8 +345,50 @@ type RuntimeStatus struct {
 	ClaudeConfigured   bool
 	ClaudeStatus       string
 	ClaudeKeyPreview   string
+	GWSAvailable       bool
+	GWSStatus          string
 	DatabaseReady      bool
 	LastRunAt          *time.Time
+}
+
+// GWSCLIErrorKind は gws 実行失敗時の分類を表す。
+type GWSCLIErrorKind string
+
+const (
+	GWSCLIErrorKindNone           GWSCLIErrorKind = "none"
+	GWSCLIErrorKindNotInstalled   GWSCLIErrorKind = "not_installed"
+	GWSCLIErrorKindAuth           GWSCLIErrorKind = "auth"
+	GWSCLIErrorKindInvalidCommand GWSCLIErrorKind = "invalid_command"
+	GWSCLIErrorKindTimeout        GWSCLIErrorKind = "timeout"
+	GWSCLIErrorKindExecution      GWSCLIErrorKind = "execution"
+)
+
+// GWSDiagnosticsResult は gws 導入診断の結果を表す。
+type GWSDiagnosticsResult struct {
+	Success    bool
+	Available  bool
+	Message    string
+	BinaryPath string
+	Version    string
+	Command    string
+	Output     string
+	ErrorKind  GWSCLIErrorKind
+}
+
+// GWSGmailDryRunRequest は gws Gmail dry-run の入力を表す。
+type GWSGmailDryRunRequest struct {
+	Query      string
+	MaxResults int
+}
+
+// GWSGmailDryRunResult は gws Gmail dry-run の結果を表す。
+type GWSGmailDryRunResult struct {
+	Success    bool
+	Message    string
+	BinaryPath string
+	Command    string
+	Output     string
+	ErrorKind  GWSCLIErrorKind
 }
 
 // SchedulerSettings は定期実行と通知の設定を表す。
