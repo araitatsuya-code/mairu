@@ -1436,6 +1436,62 @@ func TestUpdateClassificationLabelSettingsPersistsValues(t *testing.T) {
 	if got.NeedsReviewLabelName != "Team/Review" {
 		t.Fatalf("NeedsReviewLabelName = %q, want %q", got.NeedsReviewLabelName, "Team/Review")
 	}
+
+	rawChecks := []struct {
+		key  string
+		want string
+	}{
+		{key: classificationLabelSettingImportant, want: "Team/Important"},
+		{key: classificationLabelSettingNewsletter, want: types.DefaultClassificationLabelNewsletter},
+		{key: classificationLabelSettingArchive, want: "Team/Archive"},
+		{key: classificationLabelSettingUnreadPriority, want: types.DefaultClassificationLabelUnreadPriority},
+		{key: classificationLabelSettingNeedsReview, want: "Team/Review"},
+	}
+	for _, check := range rawChecks {
+		value, ok, err := store.GetSetting(ctx, check.key)
+		if err != nil {
+			t.Fatalf("GetSetting(%q) returned error: %v", check.key, err)
+		}
+		if !ok {
+			t.Fatalf("GetSetting(%q) ok = false, want true", check.key)
+		}
+		if value != check.want {
+			t.Fatalf("GetSetting(%q) = %q, want %q", check.key, value, check.want)
+		}
+	}
+}
+
+func TestUpdateClassificationLabelSettingsRejectsReservedSystemLabel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result := app.UpdateClassificationLabelSettings(types.UpdateClassificationLabelSettingsRequest{
+		ImportantLabelName: "INBOX",
+	})
+	if result.Success {
+		t.Fatalf("UpdateClassificationLabelSettings success = true, want false")
+	}
+	if !strings.Contains(result.Message, "INBOX") {
+		t.Fatalf("message = %q, want contains INBOX", result.Message)
+	}
 }
 
 func TestExecuteGmailActionsUsesCustomClassificationLabelSettings(t *testing.T) {
@@ -1558,6 +1614,53 @@ func TestExecuteGmailActionsUsesCustomClassificationLabelSettings(t *testing.T) 
 	}
 	if step != 3 {
 		t.Fatalf("step = %d, want 3", step)
+	}
+}
+
+func TestExecuteGmailActionsFailsWhenStrictLabelSettingsLoadFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close returned error: %v", err)
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test"}),
+		secretManager: manager,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	_, err = app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-1",
+				Category:    types.ClassificationCategoryImportant,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("ExecuteGmailActions error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "分類ラベル設定を読み出せませんでした") {
+		t.Fatalf("error = %q, want contains strict label settings error", err.Error())
 	}
 }
 

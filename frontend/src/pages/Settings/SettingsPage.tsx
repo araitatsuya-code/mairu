@@ -480,10 +480,20 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                 return;
             }
 
-            const latest = await loadClassificationLabelSettings();
-            setClassificationLabelSettings(latest);
-            setClassificationLabelLoaded(true);
             setClassificationLabelMessage(result.message);
+            try {
+                const latest = await loadClassificationLabelSettings();
+                setClassificationLabelSettings(latest);
+                setClassificationLabelLoaded(true);
+            } catch (cause) {
+                const reloadMessage =
+                    cause instanceof Error
+                        ? cause.message
+                        : '分類ラベル設定の再読み込みに失敗しました。';
+                setClassificationLabelError(
+                    `保存は完了しましたが、最新設定の再取得に失敗しました: ${reloadMessage}`,
+                );
+            }
         } catch (cause) {
             const message =
                 cause instanceof Error
@@ -995,23 +1005,29 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 {schedulerError ? <p className="settings-error-note">{schedulerError}</p> : null}
                             </div>
                         </li>
-                        <li className="settings-item">
-                            <div className="settings-item-header">
-                                <h3 className="settings-item-title">自動分別ラベル名</h3>
-                                <span className={`state-chip ${classificationLabelLoaded ? 'ready' : 'pending'}`}>
+                        <li className="rounded-[24px] border border-slate-400/15 bg-slate-900/35 p-6 shadow-[0_20px_45px_-30px_rgba(14,165,233,0.55)] backdrop-blur">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <h3 className="text-lg font-semibold text-slate-50">自動分別ラベル名</h3>
+                                <span
+                                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide ${
+                                        classificationLabelLoaded
+                                            ? 'border-emerald-300/35 bg-emerald-500/10 text-emerald-200'
+                                            : 'border-slate-400/35 bg-slate-600/20 text-slate-200'
+                                    }`}
+                                >
                                     {classificationLabelLoaded ? '読込済み' : '未読込'}
                                 </span>
                             </div>
-                            <p className="settings-item-body">
+                            <p className="mt-2 text-sm leading-7 text-slate-300">
                                 分類カテゴリごとに Gmail ラベル名を任意指定できます。空欄で保存すると既定値を利用します。
                             </p>
-                            <div className="settings-action-stack">
-                                <div className="settings-scheduler-grid">
-                                    <label className="settings-field" htmlFor="label-important">
-                                        <span className="settings-field-label">重要（important）</span>
+                            <div className="mt-4 grid gap-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                    <label className="grid gap-2" htmlFor="label-important">
+                                        <span className="text-sm font-semibold text-slate-300">重要（important）</span>
                                         <input
                                             id="label-important"
-                                            className="settings-input"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                             type="text"
                                             value={classificationLabelSettings.importantLabelName}
                                             onChange={(event) => {
@@ -1020,11 +1036,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                             disabled={classificationLabelPending || !classificationLabelLoaded}
                                         />
                                     </label>
-                                    <label className="settings-field" htmlFor="label-newsletter">
-                                        <span className="settings-field-label">ニュースレター（newsletter）</span>
+                                    <label className="grid gap-2" htmlFor="label-newsletter">
+                                        <span className="text-sm font-semibold text-slate-300">ニュースレター（newsletter）</span>
                                         <input
                                             id="label-newsletter"
-                                            className="settings-input"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                             type="text"
                                             value={classificationLabelSettings.newsletterLabelName}
                                             onChange={(event) => {
@@ -1033,11 +1049,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                             disabled={classificationLabelPending || !classificationLabelLoaded}
                                         />
                                     </label>
-                                    <label className="settings-field" htmlFor="label-archive">
-                                        <span className="settings-field-label">アーカイブ（archive）</span>
+                                    <label className="grid gap-2" htmlFor="label-archive">
+                                        <span className="text-sm font-semibold text-slate-300">アーカイブ（archive）</span>
                                         <input
                                             id="label-archive"
-                                            className="settings-input"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                             type="text"
                                             value={classificationLabelSettings.archiveLabelName}
                                             onChange={(event) => {
@@ -1046,11 +1062,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                             disabled={classificationLabelPending || !classificationLabelLoaded}
                                         />
                                     </label>
-                                    <label className="settings-field" htmlFor="label-unread-priority">
-                                        <span className="settings-field-label">未読優先（unread_priority）</span>
+                                    <label className="grid gap-2" htmlFor="label-unread-priority">
+                                        <span className="text-sm font-semibold text-slate-300">未読優先（unread_priority）</span>
                                         <input
                                             id="label-unread-priority"
-                                            className="settings-input"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                             type="text"
                                             value={classificationLabelSettings.unreadPriorityLabelName}
                                             onChange={(event) => {
@@ -1059,11 +1075,11 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                             disabled={classificationLabelPending || !classificationLabelLoaded}
                                         />
                                     </label>
-                                    <label className="settings-field" htmlFor="label-needs-review">
-                                        <span className="settings-field-label">要確認（needs_review）</span>
+                                    <label className="grid gap-2" htmlFor="label-needs-review">
+                                        <span className="text-sm font-semibold text-slate-300">要確認（needs_review）</span>
                                         <input
                                             id="label-needs-review"
-                                            className="settings-input"
+                                            className="w-full rounded-[14px] border border-slate-400/20 bg-slate-950/40 px-3.5 py-2.5 text-slate-50 placeholder:text-slate-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
                                             type="text"
                                             value={classificationLabelSettings.needsReviewLabelName}
                                             onChange={(event) => {
@@ -1073,9 +1089,9 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                         />
                                     </label>
                                 </div>
-                                <div className="settings-action-row">
+                                <div className="flex flex-wrap items-center gap-3">
                                     <button
-                                        className="settings-action-button"
+                                        className="inline-flex items-center justify-center rounded-[14px] bg-sky-500/90 px-4 py-2.5 text-sm font-bold text-white shadow-[0_8px_18px_-12px_rgba(14,165,233,0.9)] transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
                                         type="button"
                                         onClick={() => {
                                             void handleSaveClassificationLabelSettings();
@@ -1086,10 +1102,24 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                     </button>
                                 </div>
                                 {classificationLabelMessage ? (
-                                    <p className="settings-inline-note">{classificationLabelMessage}</p>
+                                    <p
+                                        className="text-sm leading-7 text-sky-100"
+                                        role="status"
+                                        aria-live="polite"
+                                        aria-atomic="true"
+                                    >
+                                        {classificationLabelMessage}
+                                    </p>
                                 ) : null}
                                 {classificationLabelError ? (
-                                    <p className="settings-error-note">{classificationLabelError}</p>
+                                    <p
+                                        className="text-sm leading-7 text-rose-300"
+                                        role="alert"
+                                        aria-live="assertive"
+                                        aria-atomic="true"
+                                    >
+                                        {classificationLabelError}
+                                    </p>
                                 ) : null}
                             </div>
                         </li>

@@ -71,6 +71,24 @@ const (
 	schedulerNotificationEventName = "scheduler:notification"
 )
 
+var reservedGmailSystemLabelNames = map[string]struct{}{
+	"INBOX":               {},
+	"UNREAD":              {},
+	"SENT":                {},
+	"DRAFT":               {},
+	"TRASH":               {},
+	"SPAM":                {},
+	"STARRED":             {},
+	"IMPORTANT":           {},
+	"CHAT":                {},
+	"SNOOZED":             {},
+	"CATEGORY_PERSONAL":   {},
+	"CATEGORY_SOCIAL":     {},
+	"CATEGORY_PROMOTIONS": {},
+	"CATEGORY_UPDATES":    {},
+	"CATEGORY_FORUMS":     {},
+}
+
 type classificationCheckpoint struct {
 	RunType          string   `json:"run_type"`
 	Mode             string   `json:"mode"`
@@ -434,6 +452,12 @@ func (a *App) UpdateClassificationLabelSettings(
 		UnreadPriorityLabelName: request.UnreadPriorityLabelName,
 		NeedsReviewLabelName:    request.NeedsReviewLabelName,
 	})
+	if err := validateClassificationLabelSettings(next); err != nil {
+		return types.OperationResult{
+			Success: false,
+			Message: fmt.Sprintf("分類ラベル設定の入力が不正です: %v", err),
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(a.baseContext(), dbOperationTimeout)
 	defer cancel()
@@ -785,6 +809,14 @@ func (a *App) ExecuteGmailActions(
 		return types.ExecuteGmailActionsResult{}, fmt.Errorf("重複防止に必要な DB ストアを初期化できませんでした: %w", storeErr)
 	}
 
+	labelSettings := types.ClassificationLabelSettings{}
+	if len(request.Decisions) > 0 {
+		labelSettings, err = a.getClassificationLabelSettingsStrict(baseContext, store)
+		if err != nil {
+			return types.ExecuteGmailActionsResult{}, fmt.Errorf("分類ラベル設定を読み出せませんでした: %w", err)
+		}
+	}
+
 	executionRequest := request
 	skippedLogEntries := make([]types.ActionLogEntry, 0)
 	executionRequest, skippedLogEntries, err = a.excludeAlreadySucceededActions(
@@ -801,7 +833,6 @@ func (a *App) ExecuteGmailActions(
 		Message: "実行対象がありませんでした。",
 	}
 	if len(executionRequest.Decisions) > 0 {
-		labelSettings := a.GetClassificationLabelSettings()
 		result, err = a.gmailClient.ExecuteActions(
 			baseContext,
 			token.AccessToken,
@@ -1654,6 +1685,112 @@ func (a *App) loadClassificationLabelSetting(
 		return fallback
 	}
 	return trimmed
+}
+
+func (a *App) loadClassificationLabelSettingStrict(
+	ctx context.Context,
+	store *db.Store,
+	settingKey string,
+	fallback string,
+) (string, error) {
+	value, ok, err := store.GetSetting(ctx, settingKey)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return fallback, nil
+	}
+
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
+	}
+	return trimmed, nil
+}
+
+func (a *App) getClassificationLabelSettingsStrict(
+	ctx context.Context,
+	store *db.Store,
+) (types.ClassificationLabelSettings, error) {
+	settings := types.DefaultClassificationLabelSettings()
+
+	var err error
+	settings.ImportantLabelName, err = a.loadClassificationLabelSettingStrict(
+		ctx,
+		store,
+		classificationLabelSettingImportant,
+		settings.ImportantLabelName,
+	)
+	if err != nil {
+		return types.ClassificationLabelSettings{}, fmt.Errorf("重要ラベル設定の読み出しに失敗しました: %w", err)
+	}
+	settings.NewsletterLabelName, err = a.loadClassificationLabelSettingStrict(
+		ctx,
+		store,
+		classificationLabelSettingNewsletter,
+		settings.NewsletterLabelName,
+	)
+	if err != nil {
+		return types.ClassificationLabelSettings{}, fmt.Errorf("ニュースレターラベル設定の読み出しに失敗しました: %w", err)
+	}
+	settings.ArchiveLabelName, err = a.loadClassificationLabelSettingStrict(
+		ctx,
+		store,
+		classificationLabelSettingArchive,
+		settings.ArchiveLabelName,
+	)
+	if err != nil {
+		return types.ClassificationLabelSettings{}, fmt.Errorf("アーカイブラベル設定の読み出しに失敗しました: %w", err)
+	}
+	settings.UnreadPriorityLabelName, err = a.loadClassificationLabelSettingStrict(
+		ctx,
+		store,
+		classificationLabelSettingUnreadPriority,
+		settings.UnreadPriorityLabelName,
+	)
+	if err != nil {
+		return types.ClassificationLabelSettings{}, fmt.Errorf("未読優先ラベル設定の読み出しに失敗しました: %w", err)
+	}
+	settings.NeedsReviewLabelName, err = a.loadClassificationLabelSettingStrict(
+		ctx,
+		store,
+		classificationLabelSettingNeedsReview,
+		settings.NeedsReviewLabelName,
+	)
+	if err != nil {
+		return types.ClassificationLabelSettings{}, fmt.Errorf("要確認ラベル設定の読み出しに失敗しました: %w", err)
+	}
+
+	normalized := types.NormalizeClassificationLabelSettings(settings)
+	if err := validateClassificationLabelSettings(normalized); err != nil {
+		return types.ClassificationLabelSettings{}, err
+	}
+	return normalized, nil
+}
+
+func validateClassificationLabelSettings(settings types.ClassificationLabelSettings) error {
+	candidates := []struct {
+		name  string
+		value string
+	}{
+		{name: "重要ラベル", value: settings.ImportantLabelName},
+		{name: "ニュースレターラベル", value: settings.NewsletterLabelName},
+		{name: "アーカイブラベル", value: settings.ArchiveLabelName},
+		{name: "未読優先ラベル", value: settings.UnreadPriorityLabelName},
+		{name: "要確認ラベル", value: settings.NeedsReviewLabelName},
+	}
+
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate.value)
+		if trimmed == "" {
+			continue
+		}
+		normalized := strings.ToUpper(trimmed)
+		if _, exists := reservedGmailSystemLabelNames[normalized]; exists {
+			return fmt.Errorf("%sに Gmail システムラベル名 %q は指定できません", candidate.name, trimmed)
+		}
+	}
+	return nil
 }
 
 func defaultSchedulerSettings() types.SchedulerSettings {
