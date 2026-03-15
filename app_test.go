@@ -1375,6 +1375,192 @@ func TestUpdateSchedulerSettingsPersistsValues(t *testing.T) {
 	}
 }
 
+func TestGetClassificationLabelSettingsReturnsDefaultsWhenDBUnavailable(t *testing.T) {
+	t.Parallel()
+
+	app := &App{}
+	got := app.GetClassificationLabelSettings()
+	want := types.DefaultClassificationLabelSettings()
+
+	if got != want {
+		t.Fatalf("GetClassificationLabelSettings = %+v, want %+v", got, want)
+	}
+}
+
+func TestUpdateClassificationLabelSettingsPersistsValues(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	app := &App{
+		ctx:           ctx,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result := app.UpdateClassificationLabelSettings(types.UpdateClassificationLabelSettingsRequest{
+		ImportantLabelName:      " Team/Important ",
+		NewsletterLabelName:     "",
+		ArchiveLabelName:        "Team/Archive",
+		UnreadPriorityLabelName: " ",
+		NeedsReviewLabelName:    "Team/Review",
+	})
+	if !result.Success {
+		t.Fatalf("UpdateClassificationLabelSettings success = false, message=%q", result.Message)
+	}
+
+	got := app.GetClassificationLabelSettings()
+	if got.ImportantLabelName != "Team/Important" {
+		t.Fatalf("ImportantLabelName = %q, want %q", got.ImportantLabelName, "Team/Important")
+	}
+	if got.NewsletterLabelName != types.DefaultClassificationLabelNewsletter {
+		t.Fatalf("NewsletterLabelName = %q, want default", got.NewsletterLabelName)
+	}
+	if got.ArchiveLabelName != "Team/Archive" {
+		t.Fatalf("ArchiveLabelName = %q, want %q", got.ArchiveLabelName, "Team/Archive")
+	}
+	if got.UnreadPriorityLabelName != types.DefaultClassificationLabelUnreadPriority {
+		t.Fatalf("UnreadPriorityLabelName = %q, want default", got.UnreadPriorityLabelName)
+	}
+	if got.NeedsReviewLabelName != "Team/Review" {
+		t.Fatalf("NeedsReviewLabelName = %q, want %q", got.NeedsReviewLabelName, "Team/Review")
+	}
+}
+
+func TestExecuteGmailActionsUsesCustomClassificationLabelSettings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := db.Open(ctx, db.OpenOptions{
+		Path: filepath.Join(t.TempDir(), "mairu.db"),
+	})
+	if err != nil {
+		t.Fatalf("db.Open returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close returned error: %v", err)
+		}
+	})
+
+	if err := store.SetSetting(ctx, classificationLabelSettingImportant, "Team/Important"); err != nil {
+		t.Fatalf("SetSetting returned error: %v", err)
+	}
+
+	secretStore := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(secretStore)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	step := 0
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch step {
+			case 0:
+				if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+					t.Fatalf("step0 unexpected URL: %s", r.URL.String())
+				}
+				step++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{"labels":[{"id":"INBOX","name":"INBOX","type":"system"}]}`)),
+				}, nil
+			case 1:
+				if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+					t.Fatalf("step1 unexpected URL: %s", r.URL.String())
+				}
+				var payload struct {
+					Name string `json:"name"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatalf("step1 decode error: %v", err)
+				}
+				if payload.Name != "Team/Important" {
+					t.Fatalf("step1 label name = %q, want %q", payload.Name, "Team/Important")
+				}
+				step++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{"id":"LabelImportant","name":"Team/Important","type":"user"}`)),
+				}, nil
+			case 2:
+				if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/msg-1/modify" {
+					t.Fatalf("step2 unexpected URL: %s", r.URL.String())
+				}
+				var payload struct {
+					AddLabelIDs []string `json:"addLabelIds"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatalf("step2 decode error: %v", err)
+				}
+				if len(payload.AddLabelIDs) != 1 || payload.AddLabelIDs[0] != "LabelImportant" {
+					t.Fatalf("step2 addLabelIds = %v, want [LabelImportant]", payload.AddLabelIDs)
+				}
+				step++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{}`)),
+				}, nil
+			default:
+				t.Fatalf("unexpected step: %d", step)
+				return nil, nil
+			}
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+		dbStore:       store,
+		databaseReady: true,
+	}
+
+	result, err := app.ExecuteGmailActions(types.ExecuteGmailActionsRequest{
+		Confirmed: true,
+		Decisions: []types.GmailActionDecision{
+			{
+				MessageID:   "msg-1",
+				Category:    types.ClassificationCategoryImportant,
+				ReviewLevel: types.ClassificationReviewLevelAutoApply,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteGmailActions returned error: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Success = false, want true (message=%q)", result.Message)
+	}
+	if got := strings.Join(result.CreatedLabels, ","); got != "Team/Important" {
+		t.Fatalf("CreatedLabels = %v, want [Team/Important]", result.CreatedLabels)
+	}
+	if step != 3 {
+		t.Fatalf("step = %d, want 3", step)
+	}
+}
+
 func TestBuildSchedulerNotificationWithPendingApproval(t *testing.T) {
 	t.Parallel()
 

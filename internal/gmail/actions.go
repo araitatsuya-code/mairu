@@ -22,12 +22,6 @@ const (
 
 	systemLabelInbox  = "INBOX"
 	systemLabelUnread = "UNREAD"
-
-	mairuLabelImportant      = "Mairu/Important"
-	mairuLabelNewsletter     = "Mairu/Newsletter"
-	mairuLabelArchive        = "Mairu/Archive"
-	mairuLabelUnreadPriority = "Mairu/Unread Priority"
-	mairuLabelNeedsReview    = "Mairu/Needs Review"
 )
 
 type gmailLabel struct {
@@ -66,13 +60,14 @@ func (c *Client) ExecuteActions(
 	ctx context.Context,
 	accessToken string,
 	decisions []types.GmailActionDecision,
+	labelSettings types.ClassificationLabelSettings,
 ) (types.ExecuteGmailActionsResult, error) {
 	trimmedToken := strings.TrimSpace(accessToken)
 	if trimmedToken == "" {
 		return types.ExecuteGmailActionsResult{}, fmt.Errorf("Gmail API 呼び出しに必要な access token がありません")
 	}
 
-	plans, requiredLabels, err := buildActionPlans(decisions)
+	plans, requiredLabels, err := buildActionPlans(decisions, labelSettings)
 	if err != nil {
 		return types.ExecuteGmailActionsResult{}, err
 	}
@@ -168,10 +163,13 @@ func (c *Client) ExecuteActions(
 
 func buildActionPlans(
 	decisions []types.GmailActionDecision,
+	labelSettings types.ClassificationLabelSettings,
 ) ([]actionPlan, []string, error) {
 	if len(decisions) == 0 {
 		return nil, nil, fmt.Errorf("実行対象のメールが選択されていません")
 	}
+
+	normalizedLabelSettings := types.NormalizeClassificationLabelSettings(labelSettings)
 
 	plans := make([]actionPlan, 0, len(decisions))
 	requiredLabels := make(map[string]struct{})
@@ -203,25 +201,25 @@ func buildActionPlans(
 
 		switch decision.Category {
 		case types.ClassificationCategoryImportant:
-			plan.addLabelNames = append(plan.addLabelNames, mairuLabelImportant)
+			plan.addLabelNames = append(plan.addLabelNames, normalizedLabelSettings.ImportantLabelName)
 		case types.ClassificationCategoryNewsletter:
-			plan.addLabelNames = append(plan.addLabelNames, mairuLabelNewsletter)
+			plan.addLabelNames = append(plan.addLabelNames, normalizedLabelSettings.NewsletterLabelName)
 			plan.hasMarkRead = true
 			plan.removeLabelIDs = append(plan.removeLabelIDs, systemLabelUnread)
 		case types.ClassificationCategoryJunk:
 			plan.delete = true
 		case types.ClassificationCategoryArchive:
-			plan.addLabelNames = append(plan.addLabelNames, mairuLabelArchive)
+			plan.addLabelNames = append(plan.addLabelNames, normalizedLabelSettings.ArchiveLabelName)
 			plan.hasArchive = true
 			plan.removeLabelIDs = append(plan.removeLabelIDs, systemLabelInbox)
 		case types.ClassificationCategoryUnreadPriority:
-			plan.addLabelNames = append(plan.addLabelNames, mairuLabelUnreadPriority)
+			plan.addLabelNames = append(plan.addLabelNames, normalizedLabelSettings.UnreadPriorityLabelName)
 			plan.addSystemLabelIDs = append(plan.addSystemLabelIDs, systemLabelUnread)
 		}
 
 		if !plan.delete && (decision.ReviewLevel == types.ClassificationReviewLevelHold ||
 			decision.ReviewLevel == types.ClassificationReviewLevelReviewWithReason) {
-			plan.addLabelNames = append(plan.addLabelNames, mairuLabelNeedsReview)
+			plan.addLabelNames = append(plan.addLabelNames, normalizedLabelSettings.NeedsReviewLabelName)
 		}
 
 		plan.addLabelNames = uniqueStrings(plan.addLabelNames)

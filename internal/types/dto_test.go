@@ -157,6 +157,55 @@ func TestBlocklistKindIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultClassificationLabelSettings(t *testing.T) {
+	t.Parallel()
+
+	got := DefaultClassificationLabelSettings()
+	if got.ImportantLabelName != DefaultClassificationLabelImportant {
+		t.Fatalf("ImportantLabelName = %q, want %q", got.ImportantLabelName, DefaultClassificationLabelImportant)
+	}
+	if got.NewsletterLabelName != DefaultClassificationLabelNewsletter {
+		t.Fatalf("NewsletterLabelName = %q, want %q", got.NewsletterLabelName, DefaultClassificationLabelNewsletter)
+	}
+	if got.ArchiveLabelName != DefaultClassificationLabelArchive {
+		t.Fatalf("ArchiveLabelName = %q, want %q", got.ArchiveLabelName, DefaultClassificationLabelArchive)
+	}
+	if got.UnreadPriorityLabelName != DefaultClassificationLabelUnreadPriority {
+		t.Fatalf("UnreadPriorityLabelName = %q, want %q", got.UnreadPriorityLabelName, DefaultClassificationLabelUnreadPriority)
+	}
+	if got.NeedsReviewLabelName != DefaultClassificationLabelNeedsReview {
+		t.Fatalf("NeedsReviewLabelName = %q, want %q", got.NeedsReviewLabelName, DefaultClassificationLabelNeedsReview)
+	}
+}
+
+func TestNormalizeClassificationLabelSettings(t *testing.T) {
+	t.Parallel()
+
+	got := NormalizeClassificationLabelSettings(ClassificationLabelSettings{
+		ImportantLabelName:      "  Custom/Important ",
+		NewsletterLabelName:     "",
+		ArchiveLabelName:        " ",
+		UnreadPriorityLabelName: "\tCustom/Unread\t",
+		NeedsReviewLabelName:    "Custom/Needs Review",
+	})
+
+	if got.ImportantLabelName != "Custom/Important" {
+		t.Fatalf("ImportantLabelName = %q, want %q", got.ImportantLabelName, "Custom/Important")
+	}
+	if got.NewsletterLabelName != DefaultClassificationLabelNewsletter {
+		t.Fatalf("NewsletterLabelName = %q, want %q", got.NewsletterLabelName, DefaultClassificationLabelNewsletter)
+	}
+	if got.ArchiveLabelName != DefaultClassificationLabelArchive {
+		t.Fatalf("ArchiveLabelName = %q, want %q", got.ArchiveLabelName, DefaultClassificationLabelArchive)
+	}
+	if got.UnreadPriorityLabelName != "Custom/Unread" {
+		t.Fatalf("UnreadPriorityLabelName = %q, want %q", got.UnreadPriorityLabelName, "Custom/Unread")
+	}
+	if got.NeedsReviewLabelName != "Custom/Needs Review" {
+		t.Fatalf("NeedsReviewLabelName = %q, want %q", got.NeedsReviewLabelName, "Custom/Needs Review")
+	}
+}
+
 func TestGWSCLIErrorKindValues(t *testing.T) {
 	t.Parallel()
 

@@ -7,14 +7,18 @@ import {
     checkGmailConnection,
     clearClaudeAPIKey,
     cancelGoogleLogin,
+    defaultClassificationLabelSettings,
     defaultSchedulerSettings,
     getNotificationPermissionStatus,
+    loadClassificationLabelSettings,
     loadSchedulerSettings,
     previewGWSGmailDryRun,
     requestNotificationPermission,
     saveClaudeAPIKey,
     startGoogleLogin,
+    updateClassificationLabelSettings,
     updateSchedulerSettings,
+    type ClassificationLabelSettings,
     type GWSDiagnosticsResult,
     type GWSGmailDryRunResult,
     type GmailConnectionResult,
@@ -116,6 +120,12 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
     const [schedulerError, setSchedulerError] = useState<string | null>(null);
     const [schedulerMessage, setSchedulerMessage] = useState<string | null>(null);
     const [schedulerLoaded, setSchedulerLoaded] = useState(false);
+    const [classificationLabelSettings, setClassificationLabelSettings] =
+        useState<ClassificationLabelSettings>(defaultClassificationLabelSettings);
+    const [classificationLabelLoaded, setClassificationLabelLoaded] = useState(false);
+    const [classificationLabelPending, setClassificationLabelPending] = useState(false);
+    const [classificationLabelError, setClassificationLabelError] = useState<string | null>(null);
+    const [classificationLabelMessage, setClassificationLabelMessage] = useState<string | null>(null);
     const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
         getNotificationPermissionStatus(),
     );
@@ -137,6 +147,7 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
 
         async function loadSchedulerStatus() {
             setSchedulerLoaded(false);
+            setClassificationLabelLoaded(false);
 
             try {
                 const settings = await loadSchedulerSettings();
@@ -156,6 +167,26 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                         : '自動実行設定の読み込みに失敗しました。';
                 setSchedulerError(message);
                 setSchedulerLoaded(false);
+            }
+
+            try {
+                const settings = await loadClassificationLabelSettings();
+                if (cancelled) {
+                    return;
+                }
+                setClassificationLabelSettings(settings);
+                setClassificationLabelLoaded(true);
+                setClassificationLabelError(null);
+            } catch (cause) {
+                if (cancelled) {
+                    return;
+                }
+                const message =
+                    cause instanceof Error
+                        ? cause.message
+                        : '分類ラベル設定の読み込みに失敗しました。';
+                setClassificationLabelError(message);
+                setClassificationLabelLoaded(false);
             }
 
             try {
@@ -423,6 +454,44 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
             setSchedulerError(message);
         } finally {
             setSchedulerPending(false);
+        }
+    }
+
+    function updateClassificationLabelField(
+        key: keyof ClassificationLabelSettings,
+        value: string,
+    ) {
+        setClassificationLabelSettings((previous) => ({
+            ...previous,
+            [key]: value,
+        }));
+        setClassificationLabelMessage(null);
+    }
+
+    async function handleSaveClassificationLabelSettings() {
+        setClassificationLabelPending(true);
+        setClassificationLabelError(null);
+        setClassificationLabelMessage(null);
+
+        try {
+            const result = await updateClassificationLabelSettings(classificationLabelSettings);
+            if (!result.success) {
+                setClassificationLabelError(result.message);
+                return;
+            }
+
+            const latest = await loadClassificationLabelSettings();
+            setClassificationLabelSettings(latest);
+            setClassificationLabelLoaded(true);
+            setClassificationLabelMessage(result.message);
+        } catch (cause) {
+            const message =
+                cause instanceof Error
+                    ? cause.message
+                    : '分類ラベル設定の保存に失敗しました。';
+            setClassificationLabelError(message);
+        } finally {
+            setClassificationLabelPending(false);
         }
     }
 
@@ -924,6 +993,104 @@ export function SettingsPage({ appName, status, onStatusRefresh }: SettingsPageP
                                 </div>
                                 {schedulerMessage ? <p className="settings-inline-note">{schedulerMessage}</p> : null}
                                 {schedulerError ? <p className="settings-error-note">{schedulerError}</p> : null}
+                            </div>
+                        </li>
+                        <li className="settings-item">
+                            <div className="settings-item-header">
+                                <h3 className="settings-item-title">自動分別ラベル名</h3>
+                                <span className={`state-chip ${classificationLabelLoaded ? 'ready' : 'pending'}`}>
+                                    {classificationLabelLoaded ? '読込済み' : '未読込'}
+                                </span>
+                            </div>
+                            <p className="settings-item-body">
+                                分類カテゴリごとに Gmail ラベル名を任意指定できます。空欄で保存すると既定値を利用します。
+                            </p>
+                            <div className="settings-action-stack">
+                                <div className="settings-scheduler-grid">
+                                    <label className="settings-field" htmlFor="label-important">
+                                        <span className="settings-field-label">重要（important）</span>
+                                        <input
+                                            id="label-important"
+                                            className="settings-input"
+                                            type="text"
+                                            value={classificationLabelSettings.importantLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('importantLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="label-newsletter">
+                                        <span className="settings-field-label">ニュースレター（newsletter）</span>
+                                        <input
+                                            id="label-newsletter"
+                                            className="settings-input"
+                                            type="text"
+                                            value={classificationLabelSettings.newsletterLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('newsletterLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="label-archive">
+                                        <span className="settings-field-label">アーカイブ（archive）</span>
+                                        <input
+                                            id="label-archive"
+                                            className="settings-input"
+                                            type="text"
+                                            value={classificationLabelSettings.archiveLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('archiveLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="label-unread-priority">
+                                        <span className="settings-field-label">未読優先（unread_priority）</span>
+                                        <input
+                                            id="label-unread-priority"
+                                            className="settings-input"
+                                            type="text"
+                                            value={classificationLabelSettings.unreadPriorityLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('unreadPriorityLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                    <label className="settings-field" htmlFor="label-needs-review">
+                                        <span className="settings-field-label">要確認（needs_review）</span>
+                                        <input
+                                            id="label-needs-review"
+                                            className="settings-input"
+                                            type="text"
+                                            value={classificationLabelSettings.needsReviewLabelName}
+                                            onChange={(event) => {
+                                                updateClassificationLabelField('needsReviewLabelName', event.target.value);
+                                            }}
+                                            disabled={classificationLabelPending || !classificationLabelLoaded}
+                                        />
+                                    </label>
+                                </div>
+                                <div className="settings-action-row">
+                                    <button
+                                        className="settings-action-button"
+                                        type="button"
+                                        onClick={() => {
+                                            void handleSaveClassificationLabelSettings();
+                                        }}
+                                        disabled={classificationLabelPending || !classificationLabelLoaded}
+                                    >
+                                        {classificationLabelPending ? '保存中...' : '分類ラベル設定を保存'}
+                                    </button>
+                                </div>
+                                {classificationLabelMessage ? (
+                                    <p className="settings-inline-note">{classificationLabelMessage}</p>
+                                ) : null}
+                                {classificationLabelError ? (
+                                    <p className="settings-error-note">{classificationLabelError}</p>
+                                ) : null}
                             </div>
                         </li>
                     </ul>
