@@ -273,6 +273,135 @@ func TestFetchMessagesSkipsMessageDetailFailures(t *testing.T) {
 	}
 }
 
+func TestFetchMessageDetail(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL: "https://gmail.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+					t.Fatalf("Authorization mismatch: got %q", got)
+				}
+				if r.Method != http.MethodGet {
+					t.Fatalf("unexpected method: got %s, want %s", r.Method, http.MethodGet)
+				}
+				if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/m1?format=full" {
+					t.Fatalf("unexpected URL: got %s", r.URL.String())
+				}
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"id":"m1",
+						"threadId":"t1",
+						"snippet":"first message",
+						"labelIds":["INBOX","UNREAD"],
+						"payload":{
+							"mimeType":"multipart/alternative",
+							"headers":[
+								{"name":"From","value":"alpha@example.com"},
+								{"name":"To","value":"user@example.com"},
+								{"name":"Subject","value":"subject-1"},
+								{"name":"Date","value":"Sun, 15 Mar 2026 12:00:00 +0900"}
+							],
+							"parts":[
+								{"mimeType":"text/plain","body":{"data":"SGVsbG8gcGxhaW4gYm9keQ"}},
+								{"mimeType":"text/html","body":{"data":"PHA-SGVsbG8gaHRtbCBib2R5PC9wPg"}}
+							]
+						}
+					}`)),
+				}, nil
+			}),
+		},
+	})
+
+	result, err := client.FetchMessageDetail(context.Background(), "access-token", "m1")
+	if err != nil {
+		t.Fatalf("FetchMessageDetail returned error: %v", err)
+	}
+	if result.ID != "m1" {
+		t.Fatalf("ID = %q, want %q", result.ID, "m1")
+	}
+	if result.ThreadID != "t1" {
+		t.Fatalf("ThreadID = %q, want %q", result.ThreadID, "t1")
+	}
+	if result.From != "alpha@example.com" {
+		t.Fatalf("From = %q, want %q", result.From, "alpha@example.com")
+	}
+	if result.To != "user@example.com" {
+		t.Fatalf("To = %q, want %q", result.To, "user@example.com")
+	}
+	if result.Subject != "subject-1" {
+		t.Fatalf("Subject = %q, want %q", result.Subject, "subject-1")
+	}
+	if result.Date != "Sun, 15 Mar 2026 12:00:00 +0900" {
+		t.Fatalf("Date = %q", result.Date)
+	}
+	if result.BodyText != "Hello plain body" {
+		t.Fatalf("BodyText = %q, want %q", result.BodyText, "Hello plain body")
+	}
+	if result.BodyHTML != "<p>Hello html body</p>" {
+		t.Fatalf("BodyHTML = %q, want %q", result.BodyHTML, "<p>Hello html body</p>")
+	}
+	if !result.Unread {
+		t.Fatalf("Unread = false, want true")
+	}
+	if len(result.Headers) != 4 {
+		t.Fatalf("len(Headers) = %d, want 4", len(result.Headers))
+	}
+}
+
+func TestFetchMessageDetailIgnoresNonTextLeafParts(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL: "https://gmail.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"id":"m2",
+						"threadId":"t2",
+						"snippet":"body",
+						"labelIds":["INBOX"],
+						"payload":{
+							"mimeType":"multipart/mixed",
+							"headers":[
+								{"name":"From","value":"alpha@example.com"},
+								{"name":"Subject","value":"subject-2"}
+							],
+							"parts":[
+								{"mimeType":"application/pdf","body":{"data":"UERGQklO"}},
+								{"mimeType":"image/png","body":{"data":"aW1hZ2U"}},
+								{"mimeType":"text/plain","body":{"data":"VGV4dCBib2R5"}}
+							]
+						}
+					}`)),
+				}, nil
+			}),
+		},
+	})
+
+	result, err := client.FetchMessageDetail(context.Background(), "access-token", "m2")
+	if err != nil {
+		t.Fatalf("FetchMessageDetail returned error: %v", err)
+	}
+	if result.BodyText != "Text body" {
+		t.Fatalf("BodyText = %q, want %q", result.BodyText, "Text body")
+	}
+	if result.BodyHTML != "" {
+		t.Fatalf("BodyHTML = %q, want empty", result.BodyHTML)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

@@ -259,17 +259,162 @@ func parseClassificationResults(raw string, messages []types.EmailSummary) ([]ty
 		return nil, fmt.Errorf("Claude API 応答が空です")
 	}
 
+	candidates := buildParseCandidates(trimmed)
+	var lastNormalizeErr error
+	for _, candidate := range candidates {
+		entries, ok := parseClassificationEntries(candidate)
+		if !ok {
+			continue
+		}
+
+		normalized, err := normalizeResults(entries, messages)
+		if err != nil {
+			lastNormalizeErr = err
+			continue
+		}
+		return normalized, nil
+	}
+
+	if lastNormalizeErr != nil {
+		return nil, lastNormalizeErr
+	}
+
+	return nil, fmt.Errorf("Claude API 応答を分類結果 JSON として解釈できません")
+}
+
+func parseClassificationEntries(raw string) ([]classificationResultPayload, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, false
+	}
+
 	var direct []classificationResultPayload
 	if err := json.Unmarshal([]byte(trimmed), &direct); err == nil {
-		return normalizeResults(direct, messages)
+		return direct, true
 	}
 
 	var wrapped classificationEnvelope
 	if err := json.Unmarshal([]byte(trimmed), &wrapped); err == nil {
-		return normalizeResults(wrapped.Results, messages)
+		return wrapped.Results, true
 	}
 
-	return nil, fmt.Errorf("Claude API 応答を分類結果 JSON として解釈できません")
+	return nil, false
+}
+
+func buildParseCandidates(raw string) []string {
+	candidates := make([]string, 0, 8)
+	appendCandidate := func(value string) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == trimmed {
+				return
+			}
+		}
+		candidates = append(candidates, trimmed)
+	}
+	appendSegments := func(value string) {
+		segments := extractBalancedJSONSegments(value)
+		for _, segment := range segments {
+			appendCandidate(segment)
+		}
+	}
+
+	appendCandidate(raw)
+	appendSegments(raw)
+
+	unquoted := raw
+	for i := 0; i < 2; i++ {
+		var decoded string
+		if err := json.Unmarshal([]byte(unquoted), &decoded); err != nil {
+			break
+		}
+		appendCandidate(decoded)
+		appendSegments(decoded)
+		unquoted = strings.TrimSpace(decoded)
+	}
+
+	return candidates
+}
+
+func extractBalancedJSONSegments(raw string) []string {
+	const maxSegments = 6
+	segments := make([]string, 0, 2)
+
+	for index := 0; index < len(raw) && len(segments) < maxSegments; index++ {
+		ch := raw[index]
+		if ch != '{' && ch != '[' {
+			continue
+		}
+		segment, ok := balancedJSONFrom(raw, index)
+		if !ok {
+			continue
+		}
+		segments = append(segments, segment)
+		index += len(segment) - 1
+	}
+
+	return segments
+}
+
+func balancedJSONFrom(raw string, start int) (string, bool) {
+	if start < 0 || start >= len(raw) {
+		return "", false
+	}
+
+	switch raw[start] {
+	case '{', '[':
+	default:
+		return "", false
+	}
+
+	stack := make([]byte, 0, 8)
+	inString := false
+	escaped := false
+
+	for index := start; index < len(raw); index++ {
+		ch := raw[index]
+
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, ch)
+		case '}':
+			if len(stack) == 0 || stack[len(stack)-1] != '{' {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+		case ']':
+			if len(stack) == 0 || stack[len(stack)-1] != '[' {
+				return "", false
+			}
+			stack = stack[:len(stack)-1]
+		}
+
+		if len(stack) == 0 {
+			return raw[start : index+1], true
+		}
+	}
+
+	return "", false
 }
 
 func normalizeResults(entries []classificationResultPayload, messages []types.EmailSummary) ([]types.ClassificationResult, error) {

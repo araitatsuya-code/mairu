@@ -82,6 +82,50 @@ export type GmailConnectionResult = {
     tokenRefreshed: boolean;
 };
 
+export type FetchClassificationMessagesRequest = {
+    query: string;
+    maxResults: number;
+    labelIDs: string[];
+    pageToken?: string;
+};
+
+export type FetchClassificationMessagesResult = {
+    messages: EmailSummary[];
+    nextPageToken: string;
+    tokenRefreshed: boolean;
+};
+
+export type GmailLabel = {
+    id: string;
+    name: string;
+    type: string;
+};
+
+export type ListGmailLabelsResult = {
+    labels: GmailLabel[];
+    tokenRefreshed: boolean;
+};
+
+export type GmailMessageHeader = {
+    name: string;
+    value: string;
+};
+
+export type GmailMessageDetail = {
+    id: string;
+    threadID: string;
+    from: string;
+    to: string;
+    subject: string;
+    date: string;
+    snippet: string;
+    labelIDs: string[];
+    unread: boolean;
+    bodyText: string;
+    bodyHTML: string;
+    headers: GmailMessageHeader[];
+};
+
 export type GmailActionDecision = {
     messageID: string;
     category: ClassificationCategory;
@@ -357,6 +401,88 @@ type WailsAppApi = {
                   Reason: string;
                   ReviewLevel: ClassificationReviewLevel;
                   Source?: 'claude' | 'blocklist';
+              }>;
+          };
+    FetchClassificationMessages?: (request: {
+        Query: string;
+        MaxResults: number;
+        LabelIDs?: string[];
+        PageToken?: string;
+    }) =>
+        | Promise<{
+              Messages?: Array<{
+                  ID: string;
+                  ThreadID?: string;
+                  From: string;
+                  Subject: string;
+                  Snippet: string;
+                  Unread: boolean;
+              }>;
+              NextPageToken?: string;
+              TokenRefreshed?: boolean;
+          }>
+        | {
+              Messages?: Array<{
+                  ID: string;
+                  ThreadID?: string;
+                  From: string;
+                  Subject: string;
+                  Snippet: string;
+                  Unread: boolean;
+              }>;
+              NextPageToken?: string;
+              TokenRefreshed?: boolean;
+          };
+    ListGmailLabels?: () =>
+        | Promise<{
+              Labels?: Array<{
+                  ID: string;
+                  Name: string;
+                  Type?: string;
+              }>;
+              TokenRefreshed?: boolean;
+          }>
+        | {
+              Labels?: Array<{
+                  ID: string;
+                  Name: string;
+                  Type?: string;
+              }>;
+              TokenRefreshed?: boolean;
+          };
+    FetchGmailMessageDetail?: (messageID: string) =>
+        | Promise<{
+              ID?: string;
+              ThreadID?: string;
+              From?: string;
+              To?: string;
+              Subject?: string;
+              Date?: string;
+              Snippet?: string;
+              LabelIDs?: string[];
+              Unread?: boolean;
+              BodyText?: string;
+              BodyHTML?: string;
+              Headers?: Array<{
+                  Name: string;
+                  Value: string;
+              }>;
+          }>
+        | {
+              ID?: string;
+              ThreadID?: string;
+              From?: string;
+              To?: string;
+              Subject?: string;
+              Date?: string;
+              Snippet?: string;
+              LabelIDs?: string[];
+              Unread?: boolean;
+              BodyText?: string;
+              BodyHTML?: string;
+              Headers?: Array<{
+                  Name: string;
+                  Value: string;
               }>;
           };
     CheckGmailConnection?: () =>
@@ -814,6 +940,83 @@ export async function classifyEmails(request: ClassificationRequest): Promise<Cl
             reason: item.Reason,
             reviewLevel: item.ReviewLevel,
             source: item.Source ?? 'claude',
+        })),
+    };
+}
+
+export async function fetchClassificationMessages(
+    request: FetchClassificationMessagesRequest,
+): Promise<FetchClassificationMessagesResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.FetchClassificationMessages?.({
+        Query: request.query,
+        MaxResults: request.maxResults,
+        LabelIDs: request.labelIDs,
+        PageToken: request.pageToken,
+    });
+
+    if (!result) {
+        throw new Error('実メール取得 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        messages: (raw.Messages ?? []).map((item) => ({
+            id: item.ID,
+            threadID: item.ThreadID ?? '',
+            from: item.From,
+            subject: item.Subject,
+            snippet: item.Snippet,
+            unread: item.Unread,
+        })),
+        nextPageToken: raw.NextPageToken ?? '',
+        tokenRefreshed: raw.TokenRefreshed ?? false,
+    };
+}
+
+export async function listGmailLabels(): Promise<ListGmailLabelsResult> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.ListGmailLabels?.();
+
+    if (!result) {
+        throw new Error('Gmail ラベル一覧取得 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        labels: (raw.Labels ?? []).map((item) => ({
+            id: item.ID,
+            name: item.Name,
+            type: item.Type ?? '',
+        })),
+        tokenRefreshed: raw.TokenRefreshed ?? false,
+    };
+}
+
+export async function fetchGmailMessageDetail(messageID: string): Promise<GmailMessageDetail> {
+    const appApi = window.go?.main?.App;
+    const result = appApi?.FetchGmailMessageDetail?.(messageID);
+
+    if (!result) {
+        throw new Error('Gmail メール詳細取得 API がまだ公開されていません。');
+    }
+
+    const raw = await result;
+    return {
+        id: raw.ID ?? messageID,
+        threadID: raw.ThreadID ?? '',
+        from: raw.From ?? '',
+        to: raw.To ?? '',
+        subject: raw.Subject ?? '',
+        date: raw.Date ?? '',
+        snippet: raw.Snippet ?? '',
+        labelIDs: raw.LabelIDs ?? [],
+        unread: raw.Unread ?? false,
+        bodyText: raw.BodyText ?? '',
+        bodyHTML: raw.BodyHTML ?? '',
+        headers: (raw.Headers ?? []).map((header) => ({
+            name: header.Name,
+            value: header.Value,
         })),
     };
 }

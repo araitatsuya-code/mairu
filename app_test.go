@@ -236,6 +236,310 @@ func TestCheckGmailConnectionRefreshesStoredToken(t *testing.T) {
 	}
 }
 
+func TestFetchClassificationMessagesUsesFetchConditions(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.Path {
+			case "/gmail/v1/users/me/messages":
+				if got := r.URL.Query().Get("maxResults"); got != "25" {
+					t.Fatalf("maxResults = %q, want %q", got, "25")
+				}
+				if got := r.URL.Query().Get("q"); got != "newer_than:7d -category:promotions" {
+					t.Fatalf("q = %q, want %q", got, "newer_than:7d -category:promotions")
+				}
+				if got := r.URL.Query().Get("pageToken"); got != "page-2" {
+					t.Fatalf("pageToken = %q, want %q", got, "page-2")
+				}
+				gotLabelIDs := r.URL.Query()["labelIds"]
+				if len(gotLabelIDs) != 2 {
+					t.Fatalf("len(labelIds) = %d, want 2", len(gotLabelIDs))
+				}
+				if gotLabelIDs[0] != "INBOX" || gotLabelIDs[1] != "LabelImportant" {
+					t.Fatalf("labelIds = %v, want [INBOX LabelImportant]", gotLabelIDs)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+					t.Fatalf("Authorization = %q, want %q", got, "Bearer access-token")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"messages":[{"id":"msg-1","threadId":"thread-1"}],
+						"nextPageToken":"next-page"
+					}`)),
+				}, nil
+			case "/gmail/v1/users/me/messages/msg-1":
+				if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+					t.Fatalf("Authorization = %q, want %q", got, "Bearer access-token")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"id":"msg-1",
+						"threadId":"thread-1",
+						"snippet":"message snippet",
+						"labelIds":["INBOX","UNREAD"],
+						"payload":{"headers":[
+							{"name":"From","value":"sender@example.com"},
+							{"name":"Subject","value":"subject line"}
+						]}
+					}`)),
+				}, nil
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+	}
+
+	result, err := app.FetchClassificationMessages(types.FetchClassificationMessagesRequest{
+		Query:      " newer_than:7d -category:promotions ",
+		MaxResults: 25,
+		LabelIDs:   []string{" INBOX ", "", "LabelImportant", "INBOX"},
+		PageToken:  " page-2 ",
+	})
+	if err != nil {
+		t.Fatalf("FetchClassificationMessages returned error: %v", err)
+	}
+	if result.TokenRefreshed {
+		t.Fatalf("TokenRefreshed = true, want false")
+	}
+	if result.NextPageToken != "next-page" {
+		t.Fatalf("NextPageToken = %q, want %q", result.NextPageToken, "next-page")
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(result.Messages))
+	}
+	if result.Messages[0].ID != "msg-1" {
+		t.Fatalf("Messages[0].ID = %q, want %q", result.Messages[0].ID, "msg-1")
+	}
+	if !result.Messages[0].Unread {
+		t.Fatalf("Messages[0].Unread = false, want true")
+	}
+}
+
+func TestFetchClassificationMessagesRefreshesStoredToken(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{
+		AccessToken:  "expired-access-token",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.String() {
+			case "https://oauth.test/token":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"access_token":"fresh-access-token",
+						"expires_in":3600
+					}`)),
+				}, nil
+			case "https://gmail.test/gmail/v1/users/me/messages?maxResults=50":
+				if got := r.Header.Get("Authorization"); got != "Bearer fresh-access-token" {
+					t.Fatalf("Authorization = %q, want %q", got, "Bearer fresh-access-token")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{"messages":[]}`)),
+				}, nil
+			default:
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+				return nil, nil
+			}
+		}),
+	}
+
+	app := &App{
+		authClient: auth.NewClient(auth.Config{
+			ClientID:     "client-id",
+			ClientSecret: "client-secret",
+			TokenURL:     "https://oauth.test/token",
+			HTTPClient:   httpClient,
+		}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+	}
+
+	result, err := app.FetchClassificationMessages(types.FetchClassificationMessagesRequest{})
+	if err != nil {
+		t.Fatalf("FetchClassificationMessages returned error: %v", err)
+	}
+	if !result.TokenRefreshed {
+		t.Fatalf("TokenRefreshed = false, want true")
+	}
+
+	stored, err := manager.LoadGoogleToken(ctx)
+	if err != nil {
+		t.Fatalf("LoadGoogleToken returned error: %v", err)
+	}
+	if stored.AccessToken != "fresh-access-token" {
+		t.Fatalf("stored AccessToken = %q, want %q", stored.AccessToken, "fresh-access-token")
+	}
+}
+
+func TestListGmailLabelsReturnsLabels(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() != "https://gmail.test/gmail/v1/users/me/labels" {
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+				t.Fatalf("Authorization = %q, want %q", got, "Bearer access-token")
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{
+					"labels":[
+						{"id":"LabelImportant","name":"Mairu/Important","type":"user"},
+						{"id":"INBOX","name":"INBOX","type":"system"}
+					]
+				}`)),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+	}
+
+	result, err := app.ListGmailLabels()
+	if err != nil {
+		t.Fatalf("ListGmailLabels returned error: %v", err)
+	}
+	if result.TokenRefreshed {
+		t.Fatalf("TokenRefreshed = true, want false")
+	}
+	if len(result.Labels) != 2 {
+		t.Fatalf("len(Labels) = %d, want 2", len(result.Labels))
+	}
+	if result.Labels[0].ID != "INBOX" {
+		t.Fatalf("Labels[0].ID = %q, want %q", result.Labels[0].ID, "INBOX")
+	}
+	if result.Labels[1].ID != "LabelImportant" {
+		t.Fatalf("Labels[1].ID = %q, want %q", result.Labels[1].ID, "LabelImportant")
+	}
+}
+
+func TestFetchGmailMessageDetailReturnsMessageDetail(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := auth.NewMemorySecretStore()
+	manager := auth.NewSecretManager(store)
+	if err := manager.SaveGoogleToken(ctx, auth.TokenSet{AccessToken: "access-token"}); err != nil {
+		t.Fatalf("SaveGoogleToken returned error: %v", err)
+	}
+
+	httpClient := &http.Client{
+		Transport: appRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.URL.String() != "https://gmail.test/gmail/v1/users/me/messages/msg-1?format=full" {
+				t.Fatalf("unexpected URL: %s", r.URL.String())
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+				t.Fatalf("Authorization = %q, want %q", got, "Bearer access-token")
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{
+					"id":"msg-1",
+					"threadId":"thread-1",
+					"snippet":"snippet text",
+					"labelIds":["INBOX","UNREAD"],
+					"payload":{
+						"mimeType":"text/plain",
+						"headers":[
+							{"name":"From","value":"sender@example.com"},
+							{"name":"To","value":"user@example.com"},
+							{"name":"Subject","value":"subject line"}
+						],
+						"body":{"data":"SGVsbG8gcGxhaW4gYm9keQ"}
+					}
+				}`)),
+			}, nil
+		}),
+	}
+
+	app := &App{
+		authClient:    auth.NewClient(auth.Config{}),
+		gmailClient:   gmail.NewClient(gmail.Options{BaseURL: "https://gmail.test", HTTPClient: httpClient}),
+		secretManager: manager,
+	}
+
+	result, err := app.FetchGmailMessageDetail("msg-1")
+	if err != nil {
+		t.Fatalf("FetchGmailMessageDetail returned error: %v", err)
+	}
+	if result.ID != "msg-1" {
+		t.Fatalf("ID = %q, want %q", result.ID, "msg-1")
+	}
+	if result.ThreadID != "thread-1" {
+		t.Fatalf("ThreadID = %q, want %q", result.ThreadID, "thread-1")
+	}
+	if result.Subject != "subject line" {
+		t.Fatalf("Subject = %q, want %q", result.Subject, "subject line")
+	}
+	if result.BodyText != "Hello plain body" {
+		t.Fatalf("BodyText = %q, want %q", result.BodyText, "Hello plain body")
+	}
+	if !result.Unread {
+		t.Fatalf("Unread = false, want true")
+	}
+}
+
 func TestGetRuntimeStatusClearsGmailSuccessWhenUnauthorized(t *testing.T) {
 	t.Parallel()
 
