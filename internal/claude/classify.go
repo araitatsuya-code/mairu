@@ -302,7 +302,7 @@ func parseClassificationEntries(raw string) ([]classificationResultPayload, bool
 }
 
 func buildParseCandidates(raw string) []string {
-	candidates := make([]string, 0, 4)
+	candidates := make([]string, 0, 8)
 	appendCandidate := func(value string) {
 		trimmed := strings.TrimSpace(value)
 		if trimmed == "" {
@@ -315,8 +315,15 @@ func buildParseCandidates(raw string) []string {
 		}
 		candidates = append(candidates, trimmed)
 	}
+	appendSegments := func(value string) {
+		segments := extractBalancedJSONSegments(value)
+		for _, segment := range segments {
+			appendCandidate(segment)
+		}
+	}
 
 	appendCandidate(raw)
+	appendSegments(raw)
 
 	unquoted := raw
 	for i := 0; i < 2; i++ {
@@ -325,12 +332,8 @@ func buildParseCandidates(raw string) []string {
 			break
 		}
 		appendCandidate(decoded)
+		appendSegments(decoded)
 		unquoted = strings.TrimSpace(decoded)
-	}
-
-	segments := extractBalancedJSONSegments(raw)
-	for _, segment := range segments {
-		appendCandidate(segment)
 	}
 
 	return candidates

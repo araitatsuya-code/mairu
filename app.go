@@ -509,6 +509,25 @@ func (a *App) CheckGmailConnection() types.GmailConnectionResult {
 	}
 }
 
+func (a *App) loadUsableGoogleToken(ctx context.Context) (auth.TokenSet, bool, error) {
+	token, err := a.secretManager.LoadGoogleToken(ctx)
+	if err != nil {
+		return auth.TokenSet{}, false, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
+	}
+
+	token, refreshed, err := a.authClient.EnsureValidToken(ctx, token)
+	if err != nil {
+		return auth.TokenSet{}, false, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
+	}
+	if refreshed {
+		if err := a.secretManager.SaveGoogleToken(ctx, token); err != nil {
+			return auth.TokenSet{}, false, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
+		}
+	}
+
+	return token, refreshed, nil
+}
+
 // CheckGWSDiagnostics は gws の導入状態とバージョン取得を診断する。
 func (a *App) CheckGWSDiagnostics() types.GWSDiagnosticsResult {
 	if a.gwsClient == nil {
@@ -575,19 +594,9 @@ func (a *App) FetchClassificationMessages(
 	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
 	defer cancel()
 
-	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	token, refreshed, err := a.loadUsableGoogleToken(baseContext)
 	if err != nil {
-		return types.FetchClassificationMessagesResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
-	}
-
-	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
-	if err != nil {
-		return types.FetchClassificationMessagesResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
-	}
-	if refreshed {
-		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
-			return types.FetchClassificationMessagesResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
-		}
+		return types.FetchClassificationMessagesResult{}, err
 	}
 
 	maxResults := request.MaxResults
@@ -621,19 +630,9 @@ func (a *App) ListGmailLabels() (types.ListGmailLabelsResult, error) {
 	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
 	defer cancel()
 
-	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	token, refreshed, err := a.loadUsableGoogleToken(baseContext)
 	if err != nil {
-		return types.ListGmailLabelsResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
-	}
-
-	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
-	if err != nil {
-		return types.ListGmailLabelsResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
-	}
-	if refreshed {
-		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
-			return types.ListGmailLabelsResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
-		}
+		return types.ListGmailLabelsResult{}, err
 	}
 
 	labels, err := a.gmailClient.ListLabels(baseContext, token.AccessToken)
@@ -656,19 +655,9 @@ func (a *App) FetchGmailMessageDetail(messageID string) (types.GmailMessageDetai
 	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
 	defer cancel()
 
-	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	token, _, err := a.loadUsableGoogleToken(baseContext)
 	if err != nil {
-		return types.GmailMessageDetail{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
-	}
-
-	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
-	if err != nil {
-		return types.GmailMessageDetail{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
-	}
-	if refreshed {
-		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
-			return types.GmailMessageDetail{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
-		}
+		return types.GmailMessageDetail{}, err
 	}
 
 	detail, err := a.gmailClient.FetchMessageDetail(baseContext, token.AccessToken, messageID)
@@ -698,19 +687,9 @@ func (a *App) ExecuteGmailActions(
 	baseContext, cancel := context.WithTimeout(a.baseContext(), gmailActionTimeout)
 	defer cancel()
 
-	token, err := a.secretManager.LoadGoogleToken(baseContext)
+	token, refreshed, err := a.loadUsableGoogleToken(baseContext)
 	if err != nil {
-		return types.ExecuteGmailActionsResult{}, fmt.Errorf("保存済み Google トークンを読み出せませんでした: %w", err)
-	}
-
-	token, refreshed, err := a.authClient.EnsureValidToken(baseContext, token)
-	if err != nil {
-		return types.ExecuteGmailActionsResult{}, fmt.Errorf("Google トークンを再利用できませんでした: %w", err)
-	}
-	if refreshed {
-		if err := a.secretManager.SaveGoogleToken(baseContext, token); err != nil {
-			return types.ExecuteGmailActionsResult{}, fmt.Errorf("更新した Google トークンをキーチェーンへ保存できませんでした: %w", err)
-		}
+		return types.ExecuteGmailActionsResult{}, err
 	}
 
 	store, storeErr := a.requireDBStore()

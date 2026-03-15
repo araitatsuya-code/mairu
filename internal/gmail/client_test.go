@@ -355,6 +355,53 @@ func TestFetchMessageDetail(t *testing.T) {
 	}
 }
 
+func TestFetchMessageDetailIgnoresNonTextLeafParts(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Options{
+		BaseURL: "https://gmail.test",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header: http.Header{
+						"Content-Type": []string{"application/json"},
+					},
+					Body: io.NopCloser(strings.NewReader(`{
+						"id":"m2",
+						"threadId":"t2",
+						"snippet":"body",
+						"labelIds":["INBOX"],
+						"payload":{
+							"mimeType":"multipart/mixed",
+							"headers":[
+								{"name":"From","value":"alpha@example.com"},
+								{"name":"Subject","value":"subject-2"}
+							],
+							"parts":[
+								{"mimeType":"application/pdf","body":{"data":"UERGQklO"}},
+								{"mimeType":"image/png","body":{"data":"aW1hZ2U"}},
+								{"mimeType":"text/plain","body":{"data":"VGV4dCBib2R5"}}
+							]
+						}
+					}`)),
+				}, nil
+			}),
+		},
+	})
+
+	result, err := client.FetchMessageDetail(context.Background(), "access-token", "m2")
+	if err != nil {
+		t.Fatalf("FetchMessageDetail returned error: %v", err)
+	}
+	if result.BodyText != "Text body" {
+		t.Fatalf("BodyText = %q, want %q", result.BodyText, "Text body")
+	}
+	if result.BodyHTML != "" {
+		t.Fatalf("BodyHTML = %q, want empty", result.BodyHTML)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

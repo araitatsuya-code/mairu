@@ -643,7 +643,7 @@
     font-size: 0.82rem;
     line-height: 1.5;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .classify-header-list {
@@ -660,7 +660,7 @@
 }
 
 .header-value {
-    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .classify-label-select {

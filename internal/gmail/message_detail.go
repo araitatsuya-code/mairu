@@ -111,9 +111,10 @@ func collectMessageBodyPart(
 		}
 	default:
 		if len(payload.Parts) == 0 && decoded != "" {
-			if strings.Contains(mimeType, "html") {
+			switch {
+			case strings.Contains(mimeType, "html"):
 				*htmlBodies = append(*htmlBodies, decoded)
-			} else {
+			case mimeType == "" || strings.HasPrefix(mimeType, "text/"):
 				*textBodies = append(*textBodies, decoded)
 			}
 		}

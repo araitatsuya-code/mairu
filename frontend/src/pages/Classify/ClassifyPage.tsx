@@ -1,6 +1,6 @@
 import './ClassifyPage.css';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
     classifyEmails,
@@ -36,6 +36,8 @@ type ActionExecutionHistory = {
     selectedCount: number;
     result: ExecuteGmailActionsResult;
 };
+
+type ClassificationDataMode = 'live' | 'sample' | 'mock';
 
 const maxFetchCount = 50;
 const defaultFetchCount = 50;
@@ -345,8 +347,11 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     const [selectedMessageDetail, setSelectedMessageDetail] = useState<GmailMessageDetail | null>(null);
     const [messageDetailPending, setMessageDetailPending] = useState(false);
     const [messageDetailError, setMessageDetailError] = useState<string | null>(null);
+    const [classificationDataMode, setClassificationDataMode] = useState<ClassificationDataMode>('live');
     const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
     const [lastClassifiedAt, setLastClassifiedAt] = useState<string | null>(null);
+    const messageDetailRequestIDRef = useRef(0);
+    const isLiveDataMode = classificationDataMode === 'live';
 
     const messageByID = useMemo(() => {
         return new Map(messages.map((message) => [message.id, message]));
@@ -420,6 +425,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     }
 
     function clearMessageDetail() {
+        messageDetailRequestIDRef.current += 1;
         setSelectedMessageID(null);
         setSelectedMessageDetail(null);
         setMessageDetailError(null);
@@ -474,6 +480,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             const response = await listGmailLabels();
             setAvailableLabels(response.labels);
             setSelectedLabelIDs((previous) => ensureSelectableLabelIDs(response.labels, previous));
+            setNextPageToken('');
             if (response.labels.length === 0) {
                 setLabelsMessage('取得可能なラベルが見つかりませんでした。');
             } else {
@@ -505,6 +512,24 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     function handleLabelSelectionChange(event: React.ChangeEvent<HTMLSelectElement>) {
         const next = Array.from(event.target.selectedOptions).map((option) => option.value);
         setSelectedLabelIDs(next);
+        setNextPageToken('');
+    }
+
+    function handleQueryChange(event: React.ChangeEvent<HTMLInputElement>) {
+        setFetchQuery(event.target.value);
+        setNextPageToken('');
+    }
+
+    function handleCountChange(event: React.ChangeEvent<HTMLInputElement>) {
+        const raw = event.target.value;
+        if (raw === '' || /^[0-9]+$/.test(raw)) {
+            setFetchCountInput(raw);
+            setNextPageToken('');
+        }
+    }
+
+    function handleCountBlur() {
+        setFetchCountInput((previous) => normalizeFetchCountInput(previous));
     }
 
     async function handleFetchMessages(pageToken = '') {
@@ -532,6 +557,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
 
             setMessages(response.messages);
             setResults([]);
+            setClassificationDataMode('live');
             setNextPageToken(response.nextPageToken);
             setLastFetchedAt(new Date().toISOString());
             setLastClassifiedAt(null);
@@ -567,6 +593,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         const nextResults = buildMockResults(generated);
         setMessages(generated);
         setResults(nextResults);
+        setClassificationDataMode('sample');
         setFetchQuery('');
         setSelectedLabelIDs([defaultLabelID]);
         setFetchCountInput(String(defaultFetchCount));
@@ -581,11 +608,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         resetApprovalSelection();
         resetCorrections();
         clearMessageDetail();
-        try {
-            await persistClassificationLogs(generated, nextResults);
-        } catch (cause) {
-            setError(extractErrorMessage(cause, '分類ログ保存に失敗しました。'));
-        }
+        setLoggingMessage('開発補助のサンプル結果のため分類ログ保存はスキップしました。');
     }
 
     async function handleShowMockResults() {
@@ -596,17 +619,14 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
 
         const nextResults = buildMockResults(messages);
         setResults(nextResults);
+        setClassificationDataMode('mock');
         setError(null);
         setActionError(null);
         setLastActionResult(null);
         setLastClassifiedAt(new Date().toISOString());
         resetApprovalSelection();
         resetCorrections();
-        try {
-            await persistClassificationLogs(messages, nextResults);
-        } catch (cause) {
-            setError(extractErrorMessage(cause, '分類ログ保存に失敗しました。'));
-        }
+        setLoggingMessage('開発補助のモック結果のため分類ログ保存はスキップしました。');
     }
 
     async function handleClassifyWithClaude() {
@@ -629,6 +649,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             }
 
             setResults(response.results);
+            setClassificationDataMode('live');
             setLastClassifiedAt(new Date().toISOString());
             setActionError(null);
             setLastActionResult(null);
@@ -666,11 +687,14 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
             return;
         }
 
+        const requestID = messageDetailRequestIDRef.current + 1;
+        messageDetailRequestIDRef.current = requestID;
         setSelectedMessageID(messageID);
         setMessageDetailError(null);
         setSelectedMessageDetail(null);
 
         if (messageID.startsWith('sample-')) {
+            setMessageDetailPending(false);
             setSelectedMessageDetail(buildSampleMessageDetail(summary));
             return;
         }
@@ -678,15 +702,29 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
         setMessageDetailPending(true);
         try {
             const detail = await fetchGmailMessageDetail(messageID);
+            if (messageDetailRequestIDRef.current !== requestID) {
+                return;
+            }
             setSelectedMessageDetail(detail);
         } catch (cause) {
+            if (messageDetailRequestIDRef.current !== requestID) {
+                return;
+            }
             setMessageDetailError(extractErrorMessage(cause, 'メール詳細の取得に失敗しました。'));
         } finally {
-            setMessageDetailPending(false);
+            if (messageDetailRequestIDRef.current === requestID) {
+                setMessageDetailPending(false);
+            }
         }
     }
 
     async function handleCategoryCorrection(row: ClassifiedRow, nextCategory: ClassificationCategory) {
+        if (!isLiveDataMode) {
+            setCorrectionError('サンプル/モック結果では分類修正を保存できません。');
+            setCorrectionMessage(null);
+            return;
+        }
+
         const messageID = row.result.messageID;
         setCorrectedCategories((previous) => ({
             ...previous,
@@ -741,6 +779,10 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     }
 
     async function handleExecuteSelectedActions() {
+        if (!isLiveDataMode) {
+            setActionError('サンプル/モック結果は Gmail に適用できません。実メールを取得して Claude 分類を実行してください。');
+            return;
+        }
         if (selectedDecisions.length === 0) {
             setActionError('実行対象を選択してください。');
             return;
@@ -750,6 +792,11 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
     }
 
     async function handleConfirmExecuteSelectedActions() {
+        if (!isLiveDataMode) {
+            setActionError('サンプル/モック結果は Gmail に適用できません。');
+            setActionConfirmOpen(false);
+            return;
+        }
         if (selectedDecisions.length === 0) {
             setActionError('実行対象を選択してください。');
             setActionConfirmOpen(false);
@@ -825,9 +872,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                             id="fetch-query"
                             type="text"
                             value={fetchQuery}
-                            onChange={(event) => {
-                                setFetchQuery(event.target.value);
-                            }}
+                            onChange={handleQueryChange}
                             placeholder="例: newer_than:7d -category:promotions"
                         />
                     </label>
@@ -839,15 +884,8 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                             min={1}
                             max={maxFetchCount}
                             value={fetchCountInput}
-                            onChange={(event) => {
-                                const raw = event.target.value;
-                                if (raw === '' || /^[0-9]+$/.test(raw)) {
-                                    setFetchCountInput(raw);
-                                }
-                            }}
-                            onBlur={() => {
-                                setFetchCountInput((previous) => normalizeFetchCountInput(previous));
-                            }}
+                            onChange={handleCountChange}
+                            onBlur={handleCountBlur}
                         />
                     </label>
                     <label className="classify-field" htmlFor="fetch-labels">
@@ -947,6 +985,12 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                 <p className="classify-inline-note">
                     選択ラベル: {selectedLabelIDs.length > 0 ? selectedLabelIDs.join(', ') : '未選択'}
                 </p>
+                {!isLiveDataMode ? (
+                    <p className="classify-inline-note">
+                        現在は{classificationDataMode === 'sample' ? 'サンプル' : 'モック'}結果表示中のため、
+                        分類修正保存と Gmail 反映を無効化しています。
+                    </p>
+                ) : null}
                 {labelsMessage ? <p className="classify-inline-note">{labelsMessage}</p> : null}
                 {labelsError ? <p className="classify-error-note">{labelsError}</p> : null}
                 {fetchMessage ? <p className="classify-inline-note">{fetchMessage}</p> : null}
@@ -1041,7 +1085,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                                 onClick={() => {
                                                     void handleOpenMessageDetail(message.id);
                                                 }}
-                                                disabled={messageDetailPending && selectedMessageID === message.id}
+                                                disabled={messageDetailPending}
                                             >
                                                 {messageDetailPending && selectedMessageID === message.id
                                                     ? '読込中...'
@@ -1171,7 +1215,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                             type="button"
                             className="classify-secondary-button"
                             onClick={handleSelectAllExecutableRows}
-                            disabled={rows.length === 0 || pending || actionPending}
+                            disabled={rows.length === 0 || pending || actionPending || !isLiveDataMode}
                         >
                             実行候補を全選択
                         </button>
@@ -1179,7 +1223,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                             type="button"
                             className="classify-secondary-button"
                             onClick={resetApprovalSelection}
-                            disabled={selectedDecisions.length === 0 || pending || actionPending}
+                            disabled={selectedDecisions.length === 0 || pending || actionPending || !isLiveDataMode}
                         >
                             選択解除
                         </button>
@@ -1195,6 +1239,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                 pending ||
                                 fetchPending ||
                                 !status.gmailConnected ||
+                                !isLiveDataMode ||
                                 selectedDecisions.length === 0
                             }
                         >
@@ -1207,7 +1252,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                         Gmail 接続未確認のため実行できません。Settings で接続確認を先に行ってください。
                     </p>
                 ) : null}
-                {actionConfirmOpen ? (
+                {actionConfirmOpen && isLiveDataMode ? (
                     <div className="classify-confirm-panel">
                         <p>
                             選択した {selectedDecisions.length} 件を Gmail に反映します。
@@ -1368,7 +1413,7 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                     100,
                                     Math.max(0, Math.round(numericConfidence * 100)),
                                 );
-                                const approvalEnabled = row.result.reviewLevel !== 'hold';
+                                const approvalEnabled = row.result.reviewLevel !== 'hold' && isLiveDataMode;
                                 const resolvedCategory =
                                     correctedCategories[row.result.messageID] ?? row.result.category;
                                 return (
@@ -1418,7 +1463,11 @@ export function ClassifyPage({ status }: ClassifyPageProps) {
                                                         event.target.value as ClassificationCategory,
                                                     );
                                                 }}
-                                                disabled={pending || Boolean(correctionPendingByID[row.result.messageID])}
+                                                disabled={
+                                                    pending ||
+                                                    !isLiveDataMode ||
+                                                    Boolean(correctionPendingByID[row.result.messageID])
+                                                }
                                                 aria-label={`${row.result.messageID} の分類修正`}
                                             >
                                                 {categoryOptions.map((option) => (
