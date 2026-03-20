@@ -46,6 +46,7 @@
 | MAIRU-021 | #41 | ready | Phase 4 | `action_logs` ベースの Gmail アクション重複防止 | MAIRU-009, MAIRU-010, MAIRU-018 |
 | MAIRU-022 | #42 | blocked | Phase 4 | 手動 backlog 実行の件数上限と再開導線 | MAIRU-019, MAIRU-020, MAIRU-021 |
 | MAIRU-023 | #46 | in progress | v2+ | Google Workspace CLI (`gws`) 統合基盤の PoC | MAIRU-017 |
+| MAIRU-025 | #50 | in progress | Phase 4 | 自動分別ラベル名のユーザー任意設定 | MAIRU-009, MAIRU-014, MAIRU-019 |
 
 ## Issue 詳細
 
@@ -394,6 +395,23 @@
   - `gws` がない環境でも既存 Gmail 機能が回帰しない
   - 破壊的操作が `--dry-run` + 確認 UI を通らない限り実行されない
   - PoC の検証結果をもとに「本採用 / 見送り」の判断材料が残る
+
+### MAIRU-025: 自動分別ラベル名のユーザー任意設定
+- 状態: `in progress`
+- フェーズ: Phase 4
+- GitHub: `#50`
+- 依存: `MAIRU-009`, `MAIRU-014`, `MAIRU-019`
+- 目的: 自動分別時に付与する Gmail ラベル名を固定値から分離し、ユーザー運用に合わせてカテゴリ別に任意設定できるようにする。
+- 対応内容:
+  - カテゴリ別ラベル名（important/newsletter/archive/unread_priority/needs_review）の設定 DTO を追加する
+  - DB settings へラベル設定の保存・読み込み API を追加する
+  - Gmail アクション実行時に設定済みラベル名を優先し、未設定時は既定値を使う
+  - Settings 画面にラベル名編集 UI と保存導線を追加する
+  - 手動実行 / safe-run 自動実行の両経路で同設定が使われることをテストで担保する
+- 完了条件:
+  - Settings 画面でラベル名を変更・保存できる
+  - 手動実行・自動実行の双方で変更後ラベル名が Gmail へ反映される
+  - 空入力や未保存時に既定値へフォールバックする
 
 ## GitHub Issue 化するときの手順
 1. このファイルから対象 issue を選ぶ。

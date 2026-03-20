@@ -38,8 +38,8 @@ func TestExecuteActionsCreatesLabelsAndAppliesOperations(t *testing.T) {
 					}
 					var request createLabelRequest
 					mustDecodeJSONBody(t, r, &request)
-					if request.Name != mairuLabelArchive {
-						t.Fatalf("step1 label: got %q, want %q", request.Name, mairuLabelArchive)
+					if request.Name != types.DefaultClassificationLabelArchive {
+						t.Fatalf("step1 label: got %q, want %q", request.Name, types.DefaultClassificationLabelArchive)
 					}
 					step++
 					return jsonResponse(http.StatusOK, `{"id":"LabelArchive","name":"Mairu/Archive","type":"user"}`), nil
@@ -52,8 +52,8 @@ func TestExecuteActionsCreatesLabelsAndAppliesOperations(t *testing.T) {
 					}
 					var request createLabelRequest
 					mustDecodeJSONBody(t, r, &request)
-					if request.Name != mairuLabelImportant {
-						t.Fatalf("step2 label: got %q, want %q", request.Name, mairuLabelImportant)
+					if request.Name != types.DefaultClassificationLabelImportant {
+						t.Fatalf("step2 label: got %q, want %q", request.Name, types.DefaultClassificationLabelImportant)
 					}
 					step++
 					return jsonResponse(http.StatusOK, `{"id":"LabelImportant","name":"Mairu/Important","type":"user"}`), nil
@@ -137,7 +137,7 @@ func TestExecuteActionsCreatesLabelsAndAppliesOperations(t *testing.T) {
 			Category:    types.ClassificationCategoryJunk,
 			ReviewLevel: types.ClassificationReviewLevelReview,
 		},
-	})
+	}, types.ClassificationLabelSettings{})
 	if err != nil {
 		t.Fatalf("ExecuteActions returned error: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestExecuteActionsKeepsProcessingOnPartialFailure(t *testing.T) {
 			Category:    types.ClassificationCategoryJunk,
 			ReviewLevel: types.ClassificationReviewLevelReview,
 		},
-	})
+	}, types.ClassificationLabelSettings{})
 	if err != nil {
 		t.Fatalf("ExecuteActions returned error: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestBuildActionPlansAddsNeedsReviewLabel(t *testing.T) {
 			Category:    types.ClassificationCategoryUnreadPriority,
 			ReviewLevel: types.ClassificationReviewLevelReviewWithReason,
 		},
-	})
+	}, types.ClassificationLabelSettings{})
 	if err != nil {
 		t.Fatalf("buildActionPlans returned error: %v", err)
 	}
@@ -282,6 +282,42 @@ func TestBuildActionPlansAddsNeedsReviewLabel(t *testing.T) {
 	}
 }
 
+func TestBuildActionPlansUsesCustomLabelNames(t *testing.T) {
+	t.Parallel()
+
+	plans, requiredLabels, err := buildActionPlans([]types.GmailActionDecision{
+		{
+			MessageID:   "msg-1",
+			Category:    types.ClassificationCategoryImportant,
+			ReviewLevel: types.ClassificationReviewLevelHold,
+		},
+		{
+			MessageID:   "msg-2",
+			Category:    types.ClassificationCategoryUnreadPriority,
+			ReviewLevel: types.ClassificationReviewLevelAutoApply,
+		},
+	}, types.ClassificationLabelSettings{
+		ImportantLabelName:      "Team/Important",
+		UnreadPriorityLabelName: "Team/Unread",
+		NeedsReviewLabelName:    "Team/Review",
+	})
+	if err != nil {
+		t.Fatalf("buildActionPlans returned error: %v", err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("plans length = %d, want 2", len(plans))
+	}
+	if got := strings.Join(plans[0].addLabelNames, ","); got != "Team/Important,Team/Review" {
+		t.Fatalf("plans[0].addLabelNames = %v", plans[0].addLabelNames)
+	}
+	if got := strings.Join(plans[1].addLabelNames, ","); got != "Team/Unread" {
+		t.Fatalf("plans[1].addLabelNames = %v", plans[1].addLabelNames)
+	}
+	if got := strings.Join(requiredLabels, ","); got != "Team/Important,Team/Review,Team/Unread" {
+		t.Fatalf("requiredLabels = %v", requiredLabels)
+	}
+}
+
 func TestBuildActionPlansSkipsNeedsReviewLabelForDelete(t *testing.T) {
 	t.Parallel()
 
@@ -291,7 +327,7 @@ func TestBuildActionPlansSkipsNeedsReviewLabelForDelete(t *testing.T) {
 			Category:    types.ClassificationCategoryJunk,
 			ReviewLevel: types.ClassificationReviewLevelHold,
 		},
-	})
+	}, types.ClassificationLabelSettings{})
 	if err != nil {
 		t.Fatalf("buildActionPlans returned error: %v", err)
 	}
@@ -361,7 +397,7 @@ func TestExecuteActionsLabelCreateRaceFallsBackToRelist(t *testing.T) {
 			Category:    types.ClassificationCategoryImportant,
 			ReviewLevel: types.ClassificationReviewLevelReview,
 		},
-	})
+	}, types.ClassificationLabelSettings{})
 	if err != nil {
 		t.Fatalf("ExecuteActions returned error: %v", err)
 	}
